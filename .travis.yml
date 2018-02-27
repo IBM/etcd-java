@@ -1,0 +1,17 @@
+language: java
+jdk:
+- oraclejdk8
+#- openjdk8
+
+addons:
+  apt:
+    packages:
+      - oracle-java8-installer
+
+cache:
+  directories:
+    - $HOME/.m2
+    
+before_install:
+- ./build-env/install-etcd.sh "$HOME/etcd"
+- export PATH="$HOME/etcd:$PATH"

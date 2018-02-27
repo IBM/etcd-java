@@ -1,0 +1,277 @@
+<!--
+  Copyright 2017, 2018 IBM Corp. All Rights Reserved.
+  
+  Licensed under the Apache License, Version 2.0 (the "License"); you may not
+  use this file except in compliance with the License. You may obtain a copy
+  of the License at
+  
+  http://www.apache.org/licenses/LICENSE-2.0
+  
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+  License for the specific language governing permissions and limitations
+  under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+   <modelVersion>4.0.0</modelVersion>
+   <groupId>com.ibm.etcd</groupId>
+   <artifactId>etcd-java</artifactId>
+   <version>0.0.1-SNAPSHOT</version>
+   <packaging>jar</packaging>
+
+   <name>etcd-java</name>
+   <description>etcd3 java client and utilities</description>
+   <url>https://github.com/IBM/etcd-java</url>
+
+   <licenses>
+      <license>
+         <name>The Apache License, Version 2.0</name>
+         <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      </license>
+   </licenses>
+
+   <developers>
+      <developer>
+         <id>njhill</id>
+         <name>Nick Hill</name>
+         <email>nickhill@us.ibm.com</email>
+         <organization>IBM</organization>
+      </developer>
+   </developers>
+
+   <scm>
+      <connection>scm:git:git@github.com:IBM/etcd-java.git</connection>
+      <developerConnection>scm:git:git@github.com:IBM/etcd-java.git</developerConnection>
+      <url>https://github.com/IBM/etcd-java</url>
+   </scm>
+
+   <!--
+   <distributionManagement>
+      <snapshotRepository>
+         <id>ossrh</id>
+         <url>https://oss.sonatype.org/content/repositories/snapshots</url> 
+      </snapshotRepository>
+      <repository>
+         <id>ossrh</id>
+         <url>https://oss.sonatype.org/service/local/staging/deploy/maven2/</url> 
+      </repository>
+   </distributionManagement>
+   -->
+   
+   <distributionManagement>
+      <repository>
+         <id>weaRelRepo</id>
+         <url>${weaRelRepoURL}</url>
+      </repository>
+      <snapshotRepository>
+         <id>weaSnapRepo</id>
+         <url>${weaSnapRepoURL}</url>
+      </snapshotRepository>
+   </distributionManagement>
+
+   <properties>
+      <grpc-version>1.9.1</grpc-version>
+      <netty-version>4.1.21.Final</netty-version>
+      <netty-tcnative-version>2.0.7.Final</netty-tcnative-version>
+      <protoc-version>3.5.1-1</protoc-version>
+      <jackson-version>2.9.4</jackson-version>
+      <slf4j-version>1.7.25</slf4j-version>
+      <junit-version>4.12</junit-version>
+      <guava-version>19.0</guava-version>
+
+      <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+   </properties>
+
+   <dependencies>
+      <dependency>
+         <groupId>io.netty</groupId>
+         <artifactId>netty-handler-proxy</artifactId>
+         <version>${netty-version}</version>
+      </dependency>
+      <dependency>
+         <groupId>io.netty</groupId>
+         <artifactId>netty-codec-http2</artifactId>
+         <version>${netty-version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>io.netty</groupId>
+         <artifactId>netty-tcnative-boringssl-static</artifactId>
+         <version>${netty-tcnative-version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>io.grpc</groupId>
+         <artifactId>grpc-netty</artifactId>
+         <version>${grpc-version}</version>
+         <exclusions>
+            <!-- depend on newer version of netty directly -->
+            <exclusion>
+               <groupId>io.netty</groupId>
+               <artifactId>netty-codec-http2</artifactId>
+            </exclusion>
+            <exclusion>
+               <groupId>io.netty</groupId>
+               <artifactId>netty-handler-proxy</artifactId>
+            </exclusion>
+         </exclusions>
+      </dependency>
+      <dependency>
+         <groupId>io.grpc</groupId>
+         <artifactId>grpc-protobuf</artifactId>
+         <version>${grpc-version}</version>
+      </dependency>
+      <dependency>
+         <groupId>io.grpc</groupId>
+         <artifactId>grpc-stub</artifactId>
+         <version>${grpc-version}</version>
+      </dependency>
+
+      <!-- used only for etcd cluster configuration files -->
+      <dependency>
+         <groupId>com.fasterxml.jackson.core</groupId>
+         <artifactId>jackson-databind</artifactId>
+         <version>${jackson-version}</version>
+         <scope>compile</scope>
+      </dependency>
+
+      <dependency>
+         <groupId>com.google.guava</groupId>
+         <artifactId>guava</artifactId>
+         <version>${guava-version}</version>
+         <scope>compile</scope>
+      </dependency>
+
+      <dependency>
+         <groupId>org.slf4j</groupId>
+         <artifactId>slf4j-api</artifactId>
+         <version>${slf4j-version}</version>
+         <scope>compile</scope>
+      </dependency>
+
+      <dependency>
+         <groupId>junit</groupId>
+         <artifactId>junit</artifactId>
+         <version>${junit-version}</version>
+         <scope>test</scope>
+      </dependency>
+      <dependency>
+         <groupId>org.slf4j</groupId>
+         <artifactId>slf4j-simple</artifactId>
+         <version>${slf4j-version}</version>
+         <scope>test</scope>
+      </dependency>
+   </dependencies>
+   <build>
+      <extensions>
+         <extension>
+            <groupId>kr.motd.maven</groupId>
+            <artifactId>os-maven-plugin</artifactId>
+            <version>1.4.1.Final</version>
+         </extension>
+      </extensions>
+      <plugins>
+         <plugin>
+            <groupId>org.xolstice.maven.plugins</groupId>
+            <artifactId>protobuf-maven-plugin</artifactId>
+            <version>0.5.0</version>
+            <configuration>
+               <protocArtifact>com.google.protobuf:protoc:${protoc-version}:exe:${os.detected.classifier}</protocArtifact>
+               <pluginId>grpc-java</pluginId>
+               <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc-version}:exe:${os.detected.classifier}</pluginArtifact>
+            </configuration>
+            <executions>
+               <execution>
+                  <goals>
+                     <goal>compile</goal>
+                     <goal>compile-custom</goal>
+                  </goals>
+               </execution>
+            </executions>
+         </plugin>
+         <plugin>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <version>3.7.0</version>
+            <configuration>
+               <source>1.8</source>
+               <target>1.8</target>
+            </configuration>
+         </plugin>
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <version>2.12.4</version>
+            <configuration>
+               <includes>
+                  <include>**/*TestSuite.java</include>
+               </includes>
+            </configuration>
+         </plugin>
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.0.0</version>
+            <configuration>
+               <quiet>true</quiet>
+               <nonavbar>true</nonavbar>
+               <notree>true</notree>
+               <nocomment>true</nocomment>
+               <nohelp>true</nohelp>
+            </configuration>
+            <executions>
+               <execution>
+                  <id>attach-javadocs</id>
+                  <goals>
+                     <goal>jar</goal>
+                  </goals>
+               </execution>
+            </executions>
+         </plugin>
+      </plugins>
+   </build>
+
+   <profiles>
+      <profile>
+         <id>release-artifacts</id>
+         <activation>
+            <property>
+               <name>doRelease</name>
+               <value>true</value>
+            </property>
+         </activation>
+         <build>
+            <plugins>
+               <plugin>
+                  <groupId>org.apache.maven.plugins</groupId>
+                  <artifactId>maven-source-plugin</artifactId>
+                  <version>3.0.1</version>
+                  <executions>
+                     <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                           <goal>jar</goal>
+                        </goals>
+                     </execution>
+                  </executions>
+               </plugin>
+               <plugin>
+                  <groupId>org.apache.maven.plugins</groupId>
+                  <artifactId>maven-gpg-plugin</artifactId>
+                  <version>1.6</version>
+                  <executions>
+                     <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                           <goal>sign</goal>
+                        </goals>
+                     </execution>
+                  </executions>
+               </plugin>
+            </plugins>
+         </build>
+      </profile>
+   </profiles>
+</project>
