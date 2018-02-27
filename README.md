@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/IBM/etcd-java.svg?branch=master)](https://travis-ci.org/IBM/etcd-java)
+
 # etcd-java
 
 Robust etcd3 java client
