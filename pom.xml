@@ -64,7 +64,7 @@
       <grpc-version>1.9.1</grpc-version>
       <netty-tcnative-version>2.0.7.Final</netty-tcnative-version>
       <protoc-version>3.5.1-1</protoc-version>
-      <jackson-version>2.9.4</jackson-version>
+      <gson-version>2.7</gson-version>
       <slf4j-version>1.7.25</slf4j-version>
       <junit-version>4.12</junit-version>
       <guava-version>19.0</guava-version>
@@ -77,29 +77,33 @@
          <groupId>io.netty</groupId>
          <artifactId>netty-tcnative-boringssl-static</artifactId>
          <version>${netty-tcnative-version}</version>
+         <scope>runtime</scope>
       </dependency>
 
       <dependency>
          <groupId>io.grpc</groupId>
          <artifactId>grpc-netty</artifactId>
          <version>${grpc-version}</version>
+         <scope>compile</scope>
       </dependency>
       <dependency>
          <groupId>io.grpc</groupId>
          <artifactId>grpc-protobuf</artifactId>
          <version>${grpc-version}</version>
+         <scope>compile</scope>
       </dependency>
       <dependency>
          <groupId>io.grpc</groupId>
          <artifactId>grpc-stub</artifactId>
          <version>${grpc-version}</version>
+         <scope>compile</scope>
       </dependency>
 
       <!-- used only for etcd cluster configuration files -->
       <dependency>
-         <groupId>com.fasterxml.jackson.core</groupId>
-         <artifactId>jackson-databind</artifactId>
-         <version>${jackson-version}</version>
+         <groupId>com.google.code.gson</groupId>
+         <artifactId>gson</artifactId>
+         <version>${gson-version}</version>
          <scope>compile</scope>
       </dependency>
 

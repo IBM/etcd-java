@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.List;
@@ -34,15 +36,14 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.annotation.JsonInclude.Include;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Throwables;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Sets;
 import com.google.common.io.ByteSource;
 import com.google.common.io.Files;
+import com.google.gson.Gson;
+import com.google.gson.annotations.SerializedName;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
 
@@ -254,28 +255,26 @@ public class EtcdClusterConfig {
     
     // ----  json deserialization
     
-    private static final ObjectMapper jsonMapper = new ObjectMapper()
-            .setSerializationInclusion(Include.NON_NULL)
-            .setSerializationInclusion(Include.NON_DEFAULT);
+    private static final Gson gson = new Gson();
     
-    private static JsonConfig deserializeJson(InputStream in) throws IOException {
-        return jsonMapper.readValue(in, JsonConfig.class);
+    private static JsonConfig deserializeJson(InputStream in) {
+        return gson.fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), JsonConfig.class);
     }
     
     static class JsonConfig {
-        @JsonProperty("endpoints")
+        @SerializedName("endpoints")
         String endpoints;
-        @JsonProperty("userid")
+        @SerializedName("userid")
         String user;
-        @JsonProperty("password")
+        @SerializedName("password")
         String password;
-        @JsonProperty("root_prefix") // a.k.a namespace
+        @SerializedName("root_prefix") // a.k.a namespace
         String rootPrefix;
-        @JsonProperty("compose_deployment")
+        @SerializedName("compose_deployment")
         String composeDeployment;
-        @JsonProperty("certificate")
+        @SerializedName("certificate")
         String certificate;
-        @JsonProperty("certificate_file")
+        @SerializedName("certificate_file")
         String certificateFile;
     }
 }
