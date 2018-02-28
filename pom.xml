@@ -59,21 +59,9 @@
       </repository>
    </distributionManagement>
    -->
-   
-   <distributionManagement>
-      <repository>
-         <id>weaRelRepo</id>
-         <url>${weaRelRepoURL}</url>
-      </repository>
-      <snapshotRepository>
-         <id>weaSnapRepo</id>
-         <url>${weaSnapRepoURL}</url>
-      </snapshotRepository>
-   </distributionManagement>
 
    <properties>
       <grpc-version>1.9.1</grpc-version>
-      <netty-version>4.1.21.Final</netty-version>
       <netty-tcnative-version>2.0.7.Final</netty-tcnative-version>
       <protoc-version>3.5.1-1</protoc-version>
       <jackson-version>2.9.4</jackson-version>
@@ -87,17 +75,6 @@
    <dependencies>
       <dependency>
          <groupId>io.netty</groupId>
-         <artifactId>netty-handler-proxy</artifactId>
-         <version>${netty-version}</version>
-      </dependency>
-      <dependency>
-         <groupId>io.netty</groupId>
-         <artifactId>netty-codec-http2</artifactId>
-         <version>${netty-version}</version>
-      </dependency>
-
-      <dependency>
-         <groupId>io.netty</groupId>
          <artifactId>netty-tcnative-boringssl-static</artifactId>
          <version>${netty-tcnative-version}</version>
       </dependency>
@@ -106,17 +83,6 @@
          <groupId>io.grpc</groupId>
          <artifactId>grpc-netty</artifactId>
          <version>${grpc-version}</version>
-         <exclusions>
-            <!-- depend on newer version of netty directly -->
-            <exclusion>
-               <groupId>io.netty</groupId>
-               <artifactId>netty-codec-http2</artifactId>
-            </exclusion>
-            <exclusion>
-               <groupId>io.netty</groupId>
-               <artifactId>netty-handler-proxy</artifactId>
-            </exclusion>
-         </exclusions>
       </dependency>
       <dependency>
          <groupId>io.grpc</groupId>
