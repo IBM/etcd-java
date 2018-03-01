@@ -75,7 +75,7 @@ public class RangeCacheTest {
         kvc.put(bs("sit-test/a"), bs("val")).sync();
         kvc.put(bs("sit-test/d"), bs("val")).sync();
         
-        try(RangeCache rc = new RangeCache(client, bs("sit-test/"), false)) {
+        try(RangeCache rc = new RangeCache(directClient, bs("sit-test/"), false)) {
             
             //NOTE first RangeCache has NOT been started
             
@@ -85,7 +85,7 @@ public class RangeCacheTest {
             
             assertEquals(2, Iterators.size(rc.iterator()));
             
-            try(RangeCache rc2 = new RangeCache(client, bs("sit-test/"), false)) {
+            try(RangeCache rc2 = new RangeCache(directClient, bs("sit-test/"), false)) {
                 
                 rc2.delete(bs("sit-test/d"));
                 

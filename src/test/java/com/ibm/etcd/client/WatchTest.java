@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -233,7 +234,7 @@ public class WatchTest {
 
                 KvClient directKv = directClient.getKvClient();
 
-                Phaser p = new Phaser();
+                Phaser p = new Phaser(1);
                 Map<ByteString,Object> watchedKeys = new ConcurrentHashMap<>();
                 
                 int i = 0;
@@ -248,36 +249,36 @@ public class WatchTest {
                     p.register();
 
                     final int ii = i;
-                    Watch[] w = new Watch[1];
-                    w[0] = client.getKvClient().watch(key)
+                    AtomicReference<Watch> w = new AtomicReference<>();
+                    w.set(client.getKvClient().watch(key)
                             .startRevision(pr.getHeader().getRevision())
                             .start((ListenerObserver<WatchUpdate>)(complete,wu,err) -> {
-                                //System.out.println(key.toStringUtf8()+": c="+complete+" e="
-                                //       +err+(wu!=null?" wce="+wu.getEvents().size():""));
                                 if(complete) {
                                     if(err != null) {
                                         watchedKeys.replace(key, err);
                                         err.printStackTrace();
                                     } else watchedKeys.remove(key);
-                                    p.arrive();
+                                    if(w.get() == null) p.arrive();
                                 } else if(!wu.getEvents().isEmpty()) {
                                     if(value.equals(wu.getEvents().get(0).getKv().getValue())) {
                                         if(ii % 2 == 0) {
                                             // cancel every other watch
-                                            w[0].close();
+                                            w.get().close();
+                                            w.set(null);
                                         } else {
                                             watchedKeys.remove(key);
                                             p.arrive();
                                         }
                                     } else {
-                                        watchedKeys.replace(key, new AssertionError());
+                                        watchedKeys.replace(key, "unexpected watch event value");
                                         p.arrive();
                                     }
                                 }
-                            });
+                            }));
                     Thread.sleep((long)(Math.random()*500));
                 }
                 
+                p.arrive();
                 p.awaitAdvanceInterruptibly(0, 8, TimeUnit.SECONDS);
                 
                 System.out.println("created "+i+" watches; left incomplete: "+watchedKeys.size());
@@ -286,12 +287,9 @@ public class WatchTest {
                 System.out.println("** "+e.getKey().toStringUtf8()+"="+e.getValue()));
                 
                 assertTrue(watchedKeys.isEmpty());
-
             }
         }
     }
-    
-    //TODO another resiliency test... create/close watches in loop while starting/stopping proxy
     
     @Test
     public void testCreateFail() throws Exception {
