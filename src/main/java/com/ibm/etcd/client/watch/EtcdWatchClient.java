@@ -386,14 +386,16 @@ public class EtcdWatchClient implements Closeable {
         @Override
         public void onError(Throwable t) {
             logger.debug("onError called for watch request stream", t);
-            if(!GrpcClient.causedBy(t, CancellationException.class) && !closed) {
-                logger.warn("Unexpected fatal watch stream error", t);
-                // this will cancel/complete all open user watches -
-                // complete their futures exceptionally if not started,
-                // and send a final onError to their stream observers
-                onReplacedOrFailed(null, t instanceof Exception
-                        ? (Exception)t : new RuntimeException(t));
+            if(closed || GrpcClient.causedBy(t, CancellationException.class)) return;
+            synchronized(EtcdWatchClient.this) {
+                if(closed) return;
             }
+            logger.warn("Unexpected fatal watch stream error", t);
+            // this will cancel/complete all open user watches -
+            // complete their futures exceptionally if not started,
+            // and send a final onError to their stream observers
+            onReplacedOrFailed(null, t instanceof Exception
+                    ? (Exception)t : new RuntimeException(t));
         }
         void onReplacedOrFailed(StreamObserver<WatchRequest> newRequestStream, Exception err) {
             List<WatcherRecord> pending = null;

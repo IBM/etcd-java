@@ -150,7 +150,7 @@ public class LeaseTest {
             long before = System.currentTimeMillis();
             
             // second lease should now become active
-            long newLeaseId = pl2.get(10, TimeUnit.SECONDS);
+            long newLeaseId = pl2.get(20, TimeUnit.SECONDS);
             assertTrue(newLeaseId > 0L);
             assertNotEquals(pl.getLeaseId(), newLeaseId);
             assertEquals(LeaseState.ACTIVE, pl2.getState());
