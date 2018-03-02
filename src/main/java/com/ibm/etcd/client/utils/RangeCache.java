@@ -672,6 +672,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     /**
      * {@link Iterator#remove()} not supported on returned iterators
+     * 
+     * @return an {@link Iterator} over the {@link KeyValues} of this cache
      */
     public Iterator<KeyValue> iterator() {
         // filtering iterator is unmodifiable
@@ -683,7 +685,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * Iterator whose contents is guaranteed to be sequentially consistent
      * with remote updates to the cached range.
      * 
-     * @return
+     * @return an {@link Iterator} over the {@link KeyValues} of this cache
      */
     public Iterator<KeyValue> strongIterator() {
         entries.get(fromKey); // memory barrier prior to reading seenUpToRev

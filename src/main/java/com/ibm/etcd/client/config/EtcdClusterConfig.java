@@ -190,7 +190,6 @@ public class EtcdClusterConfig {
      * @param fileOrSimpleString path to json config file <b>or</b> simple config of the form
      *     "endpoint1,endpoint2,...;rootPrefix=&lt;prefix&gt;", where ;rootPrefix=&lt;prefix&gt;
      *     is optional.
-     * @return
      * @throws IOException
      */
     public static EtcdClusterConfig fromJsonFileOrSimple(String fileOrSimpleString) throws IOException {

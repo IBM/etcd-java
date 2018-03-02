@@ -46,14 +46,14 @@ public interface LeaseClient {
      * 
      * @param leaseId
      * @param ttlSecs
-     * @return
+     * @return future for {@link LeaseGrantResponse}
      */
     ListenableFuture<LeaseGrantResponse> create(long leaseId, long ttlSecs);
     
     /**
      * 
      * @param ttlSecs
-     * @return
+     * @return future for {@link LeaseGrantResponse}
      */
     default ListenableFuture<LeaseGrantResponse> create(long ttlSecs) {
         return create(0L, ttlSecs);
@@ -62,7 +62,7 @@ public interface LeaseClient {
     /**
      * 
      * @param leaseId
-     * @return
+     * @return future for {@link LeaseRevokeResponse}
      */
     ListenableFuture<LeaseRevokeResponse> revoke(long leaseId);
     
@@ -70,14 +70,14 @@ public interface LeaseClient {
      * 
      * @param leaseId
      * @param includeKeys
-     * @return
+     * @return future for {@link LeaseTimeToLiveResponse}
      */
     ListenableFuture<LeaseTimeToLiveResponse> ttl(long leaseId, boolean includeKeys);
     
     /**
      * 
      * @param leaseId
-     * @return
+     * @return future for {@link LeaseTimeToLiveResponse}
      */
     default ListenableFuture<LeaseTimeToLiveResponse> ttl(long leaseId) {
         return ttl(leaseId, false);
@@ -86,7 +86,7 @@ public interface LeaseClient {
     /**
      * 
      * @param leaseId
-     * @return
+     * @return future for {@link LeaseKeepAliveResponse}
      */
     ListenableFuture<LeaseKeepAliveResponse> keepAliveOnce(long leaseId);
     
@@ -95,7 +95,7 @@ public interface LeaseClient {
      * <p>
      * Supported in versions &gt;= 3.3 only
      * 
-     * @return
+     * @return future for {@link LeaseLeasesResponse}
      */
     ListenableFuture<LeaseLeasesResponse> list();
     
@@ -111,7 +111,6 @@ public interface LeaseClient {
      * <b>NOTE</b> sole "ownership" of the lease is assumed - i.e. the lease should
      * not be revoked elsewhere.
      * 
-     * @return
      */
     FluentMaintainRequest maintain();
 }

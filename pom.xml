@@ -183,6 +183,7 @@
                <notree>true</notree>
                <nocomment>true</nocomment>
                <nohelp>true</nohelp>
+               <doclint>none</doclint>
             </configuration>
             <executions>
                <execution>
@@ -202,7 +203,8 @@
             <configuration>
                 <serverId>ossrh</serverId>
                 <nexusUrl>https://oss.sonatype.org/</nexusUrl>
-                <autoReleaseAfterClose>true</autoReleaseAfterClose>
+                <!-- for now, don't auto-release -->
+                <autoReleaseAfterClose>false</autoReleaseAfterClose>
             </configuration>
         </plugin>
       </plugins>

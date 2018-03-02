@@ -160,7 +160,7 @@ public interface KvClient {
     /**
      * 
      * @param request
-     * @return
+     * @return future for {@link RangeResponse}
      */
     ListenableFuture<RangeResponse> get(RangeRequest request);
     
@@ -168,26 +168,23 @@ public interface KvClient {
     /**
      * 
      * @param key key to get or {@link #ALL_KEYS} for the entire keyspace
-     * @return
      */
     FluentRangeRequest get(ByteString key);
     
     /**
      * 
      * @param txn
-     * @return
+     * @return future for {@link TxnResponse}
      */
     ListenableFuture<TxnResponse> txn(TxnRequest txn);
     
     /**
-     * 
-     * @return
+     * Start a fluent transaction request
      */
     FluentTxnRequest txnIf();
     
     /**
-     * 
-     * @return
+     * Start a fluent batch transaction request
      */
     FluentTxnOps<?> batch();
     
@@ -195,41 +192,44 @@ public interface KvClient {
     /**
      * 
      * @param request
-     * @return
+     * @return future for {@link PutResponse}
      */
     ListenableFuture<PutResponse> put(PutRequest request);
     
     //TODO maybe combine following two
     /**
+     * Put a key/value with no associated lease. If the key already
+     * exists, its value will be updated and any lease association
+     * will be cleared.
      * 
      * @param key
      * @param value
-     * @return
      */
     FluentPutRequest put(ByteString key, ByteString value);
     
     /**
+     * Put a key/value associated with a lease.
      * 
      * @param key
      * @param value
      * @param leaseId
-     * @return
      */
     FluentPutRequest put(ByteString key, ByteString value, long leaseId);
     
     /**
+     * Associate an existing key/value with a lease.
      * 
      * @param key
      * @param leaseId
-     * @return
      */
     FluentPutRequest setLease(ByteString key, long leaseId);
     
     /**
+     * Put a key/value without affecting its lease association if
+     * the key already exists.
      * 
      * @param key
      * @param value
-     * @return
      */
     FluentPutRequest setValue(ByteString key, ByteString value);
     
@@ -237,14 +237,14 @@ public interface KvClient {
     /**
      * 
      * @param request
-     * @return
+     * @return future for {@link DeleteRangeResponse}
      */
     ListenableFuture<DeleteRangeResponse> delete(DeleteRangeRequest request);
     
     /**
+     * Start a fluent delete request
      * 
      * @param key key to delete or {@link #ALL_KEYS} to delete <b>everything</b>
-     * @return
      */
     FluentDeleteRequest delete(ByteString key);
     
@@ -312,9 +312,10 @@ public interface KvClient {
       Watch watch(WatchCreateRequest request, StreamObserver<WatchUpdate> updates);
       
       /**
+       * Start a fluent watch request
+       * 
        * @see #watch(WatchCreateRequest, StreamObserver)
        * @param key key to watch or {@link #ALL_KEYS} to watch the entire keyspace
-       * @return
        */
       FluentWatchRequest watch(ByteString key);
     
