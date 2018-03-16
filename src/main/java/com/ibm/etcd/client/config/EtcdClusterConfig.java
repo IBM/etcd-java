@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client.config;
 
+import static com.ibm.etcd.client.KeyUtils.bs;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import java.io.File;
@@ -211,10 +212,6 @@ public class EtcdClusterConfig {
             Throwables.propagateIfInstanceOf(ee.getCause(), CertificateException.class);
             throw Throwables.propagate(ee.getCause());
         }
-    }
-    
-    protected static ByteString bs(Object str) {
-        return str !=  null ? ByteString.copyFromUtf8(str.toString()) : null;
     }
     
     private static volatile boolean isShutdown = false;

@@ -96,6 +96,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     private final ByteString fromKey, toKey;
     
+    private final EtcdClient client;
     private final KvClient kvClient;
     private /*final*/ Watch watch;
     
@@ -125,6 +126,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public RangeCache(EtcdClient client, ByteString fromKey, ByteString toKey, boolean sorted) {
         this.fromKey = fromKey;
         this.toKey = toKey;
+        this.client = client;
         this.kvClient = client.getKvClient();
         this.entries = !sorted ? new ConcurrentHashMap<>(32,.75f,4)
                 : new ConcurrentSkipListMap<>(KeyUtils::compareByteStrings);
@@ -232,7 +234,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                         @Override public void onCompleted() {
                             // should only happen after external close()
                             if(!closed) {
-                                logger.error("Watch completed unexpectedly (not closed)");
+                                if(!client.isClosed()) {
+                                    logger.error("Watch completed unexpectedly (not closed)");
+                                }
                                 close();
                             }
                         }

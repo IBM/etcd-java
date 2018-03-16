@@ -15,6 +15,8 @@
  */
 package com.ibm.etcd.client.utils;
 
+import static com.ibm.etcd.client.KeyUtils.bs;
+
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -59,7 +61,7 @@ public class EtcdLeaderElection implements AutoCloseable {
     // maybe use serializedexecutor here
     
     public EtcdLeaderElection(EtcdClient client, ByteString prefix, String candidateId) {
-        if(candidateId.contains("\\n")) {
+        if(candidateId != null && candidateId.contains("\\n")) {
             throw new IllegalArgumentException("id can't contain linebreak");
         }
         this.bytesPrefix = prefix;
@@ -88,6 +90,7 @@ public class EtcdLeaderElection implements AutoCloseable {
             String chosenId = chosen == null ? null : candId(chosen);
             String priorLeaderId = leaderId;
             leaderId = chosenId;
+            if(id == null) return; // observer only
             boolean wasUs = id.equals(priorLeaderId), isUs = id.equals(chosenId);
             if(wasUs ^ isUs) {
                 leader = isUs;
@@ -153,11 +156,7 @@ public class EtcdLeaderElection implements AutoCloseable {
         int nl = str.indexOf('\n');
         return nl == -1 ? str : str.substring(0, nl);
     }
-    
-    public static ByteString bs(String str) {
-        return ByteString.copyFromUtf8(str);
-    }
-    
+
     // ------ election listener class
     
     public interface ElectionListener {

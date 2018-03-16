@@ -49,5 +49,9 @@ public class KeyUtils {
         return s1 - s2;
     }
     
+    public static ByteString bs(String str) {
+        return str != null ? ByteString.copyFromUtf8(str) : null;
+    }
+    
     //TODO other stuff for namespaces etc
 }
