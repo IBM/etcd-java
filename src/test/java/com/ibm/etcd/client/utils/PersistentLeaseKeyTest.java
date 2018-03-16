@@ -117,7 +117,7 @@ public class PersistentLeaseKeyTest {
             assertEquals(bs("somedata"), kv.getValue());
             assertEquals((long)leaseId, kv.getLease());
             
-            Thread.sleep((ttl+1) * 1000L);
+            Thread.sleep((pl.getCurrentTtlSecs()+2) * 1000L);
             // lease should have now expired and key should be gone
             assertEquals(0, directKvClient.get(bs("mykeyy")).sync().getCount());
             
