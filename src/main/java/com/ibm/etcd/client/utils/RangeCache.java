@@ -525,7 +525,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public PutResult put(ByteString key, ByteString value, long lease,
             CompareOrBuilder... conditions) {
 
-        ListenableFuture<TxnResponse> tf = doPut(key, value, true, 0L, conditions);
+        ListenableFuture<TxnResponse> tf = doPut(key, value, true, lease, conditions);
         //TODO -- async option
         TxnResponse tr = waitFor(tf, TIMEOUT_MS);
         if(tr.getSucceeded()) {
@@ -581,7 +581,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public long putNoGet(ByteString key, ByteString value, long lease,
             CompareOrBuilder... conditions) {
 
-        ListenableFuture<TxnResponse> tf = doPut(key, value, false, 0L, conditions);
+        ListenableFuture<TxnResponse> tf = doPut(key, value, false, lease, conditions);
         //TODO -- async option
         TxnResponse tr = waitFor(tf, TIMEOUT_MS);
         if(!tr.getSucceeded()) return -1L;
