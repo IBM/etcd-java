@@ -31,7 +31,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -149,12 +152,14 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         if(closed) throw new IllegalStateException("closed");
         if(startFuture!=null) throw new IllegalStateException("already started");
         
-        return startFuture = fullRefreshCache(true);
+        return startFuture = fullRefreshCache();
     }
     
     // internal method - should not be called while watch is active
-    protected ListenableFuture<Boolean> fullRefreshCache(boolean firstTime) {
+    protected ListenableFuture<Boolean> fullRefreshCache() {
         ListenableFuture<List<RangeResponse>> rrfut;
+        long seenUpTo = seenUpToRev;
+        boolean firstTime = (seenUpTo == 0L);
         if(firstTime || entries.size() <= 20) {
             //TODO *maybe* chunking (for large caches)
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
@@ -165,7 +170,6 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         } else {
             // in case the local cache is large, reduce data transfer by requesting
             // just keys, and full key+value only for those modified since seenUpToRev
-            long seenUpTo = seenUpToRev;
             RangeRequest.Builder rangeReqBld = RangeRequest.newBuilder()
                     .setKey(fromKey).setRangeEnd(toKey);
             RangeRequest newModsReq = rangeReqBld
@@ -245,7 +249,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                             if(t instanceof RevisionCompactedException) synchronized(RangeCache.this) {
                                 // fail if happens during start, otherwise refresh
                                 if(!closed && startFuture != null && startFuture.isDone()) {
-                                    startFuture = fullRefreshCache(false); // will renew watch
+                                    startFuture = fullRefreshCache(); // will renew watch
                                 }
                             }
                         }
@@ -694,6 +698,28 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public Iterator<KeyValue> strongIterator() {
         entries.get(fromKey); // memory barrier prior to reading seenUpToRev
         long seenUpTo = seenUpToRev;
+        
+        if(seenUpTo == 0L) {
+            ListenableFuture<Boolean> startFut;
+            synchronized(this) {
+                startFut = startFuture;
+            }
+            if(startFut == null) {
+                // cache has not yet been started
+                return kvClient.get(fromKey).rangeEnd(toKey)
+                        .timeout(120_000L).sync().getKvsList().iterator();
+            } else try {
+                startFut.get(2L, TimeUnit.MINUTES);
+                // now started
+                seenUpTo = seenUpToRev;
+            } catch(TimeoutException te) {
+                throw Status.DEADLINE_EXCEEDED.asRuntimeException();
+            } catch(ExecutionException e) {
+                throw Status.UNKNOWN.withCause(e).asRuntimeException();
+            } catch(InterruptedException|CancellationException e) {
+                throw Status.CANCELLED.withCause(e).asRuntimeException();
+            }
+        }
         
         /* 
          * This logic is similar to that in fullRefreshCache(), but
