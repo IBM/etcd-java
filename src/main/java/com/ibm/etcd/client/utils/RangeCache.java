@@ -678,6 +678,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         return putNoGet(key, null, modRev) != -1L;
     }
     
+    public Set<ByteString> keySet() {
+        return entries.keySet();
+    }
+    
     /**
      * {@link Iterator#remove()} not supported on returned iterators
      * 

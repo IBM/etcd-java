@@ -94,11 +94,11 @@ public class WatchTest {
             };
 
             Watch watch = kvc.watch(bs("/watchtest")).asPrefix().start(observer);
+            //assertFalse(watch.isDone());
             
             // test blocking watch at the same time
             WatchIterator watchIterator = kvc.watch(bs("/watchtest")).asPrefix().start();
 
-            assertFalse(watch.isDone());
             assertTrue(watch.get(1, TimeUnit.SECONDS));
 
             kvc.put(bs("/watchtest/a"), bs("a value")).sync();
