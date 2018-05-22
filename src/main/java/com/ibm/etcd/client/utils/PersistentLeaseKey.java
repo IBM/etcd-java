@@ -27,8 +27,8 @@ import com.google.common.util.concurrent.SettableFuture;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
 import com.ibm.etcd.client.FutureListener;
+import com.ibm.etcd.client.GrpcClient;
 import com.ibm.etcd.client.ListenerObserver;
-import com.ibm.etcd.client.SerializingExecutor;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.lease.PersistentLease;
 import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
@@ -119,7 +119,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         if(executor != null) throw new IllegalStateException("already started");
         if(closeFuture != null) throw new IllegalStateException("closed");
         //TODO TBD or have lease expose its response executor
-        executor = new SerializingExecutor(client.getExecutor());
+        executor = GrpcClient.serialized(client.getExecutor(), 0);
         if(lease == null) lease = client.getSessionLease();
         lease.addStateObserver(stateObserver, true);
     }

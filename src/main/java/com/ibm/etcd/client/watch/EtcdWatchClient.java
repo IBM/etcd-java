@@ -35,7 +35,6 @@ import org.slf4j.LoggerFactory;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.ibm.etcd.client.GrpcClient;
-import com.ibm.etcd.client.SerializingExecutor;
 import com.ibm.etcd.client.GrpcClient.ResilientResponseObserver;
 import com.ibm.etcd.client.kv.WatchUpdate;
 import com.ibm.etcd.client.kv.KvClient.Watch;
@@ -88,14 +87,13 @@ public class EtcdWatchClient implements Closeable {
     
     
     public EtcdWatchClient(GrpcClient client) {
-        this(client, client.getExecutor());
+        this(client, client.getResponseExecutor());
     }
     
     public EtcdWatchClient(GrpcClient client, Executor executor) {
         this.client = client;
-        if(executor == null) executor = ForkJoinPool.commonPool();
-        this.observerExecutor = executor;
-        this.eventLoop = new SerializingExecutor(executor, 128); // bounded for back-pressure
+        this.observerExecutor = executor != null ? executor : ForkJoinPool.commonPool();
+        this.eventLoop = GrpcClient.serialized(client.getInternalExecutor(), 128); // bounded for back-pressure
     }
     
     /**
@@ -374,7 +372,7 @@ public class EtcdWatchClient implements Closeable {
         }
         @Override
         public void onReplaced(StreamObserver<WatchRequest> newStreamRequestObserver) {
-            logger.info("onReplaced called for watch request stream"
+            if(!closed) logger.info("onReplaced called for watch request stream"
                     +(newStreamRequestObserver==null?" with newReqStream == null":""));
             onReplacedOrFailed(newStreamRequestObserver, null);
         }

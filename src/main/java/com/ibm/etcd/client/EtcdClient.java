@@ -16,6 +16,7 @@
 package com.ibm.etcd.client;
 
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,12 +27,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Delayed;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -43,19 +44,20 @@ import javax.net.ssl.TrustManagerFactory;
 import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
+import com.google.common.collect.Iterables;
 import com.google.common.io.ByteSource;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.protobuf.ByteString;
+import com.ibm.etcd.api.AuthGrpc;
+import com.ibm.etcd.api.AuthenticateRequest;
+import com.ibm.etcd.api.AuthenticateResponse;
 import com.ibm.etcd.client.kv.EtcdKvClient;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.lease.EtcdLeaseClient;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
-import com.ibm.etcd.api.AuthGrpc;
-import com.ibm.etcd.api.AuthenticateRequest;
-import com.ibm.etcd.api.AuthenticateResponse;
 
 import io.grpc.Attributes;
 import io.grpc.CallCredentials;
@@ -71,7 +73,16 @@ import io.grpc.Status.Code;
 import io.grpc.internal.GrpcUtil;
 import io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.NettyChannelBuilder;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.MultithreadEventLoopGroup;
+import io.netty.channel.SingleThreadEventLoop;
+import io.netty.channel.epoll.Epoll;
+import io.netty.channel.epoll.EpollEventLoopGroup;
+import io.netty.channel.epoll.EpollSocketChannel;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.util.concurrent.FastThreadLocalThread;
 
 public class EtcdClient implements KvStoreClient {
 
@@ -100,7 +111,7 @@ public class EtcdClient implements KvStoreClient {
     
     private final ByteString name, password;
     
-    private final ScheduledThreadPoolExecutor executor;
+    private final MultithreadEventLoopGroup internalExecutor;
     private final GrpcClient grpc;
     
     private final ManagedChannel channel;
@@ -114,7 +125,9 @@ public class EtcdClient implements KvStoreClient {
         private long defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
         private NettyChannelBuilder chanBuilder;
         private boolean preemptAuth;
-        private int threads = 8; // default 8 threads in pool - TODO TBD
+        private int threads = defaultThreadCount();
+        private Executor executor; // for call-backs
+        private boolean sendViaEventLoop = true; // default true
         private int sessTimeoutSecs = DEFAULT_SESSION_TIMEOUT_SECS;
         
         Builder(NettyChannelBuilder chanBuilder) {
@@ -139,10 +152,20 @@ public class EtcdClient implements KvStoreClient {
         }
         
         /**
-         * subject to change
+         * subject to change - threads to use for <b>internal</b> executor
          */
         public Builder withThreadCount(int threads) {
             this.threads = threads;
+            return this;
+        }
+        
+        public Builder sendViaEventLoop(boolean sendViaEventLoop) {
+            this.sendViaEventLoop = sendViaEventLoop;
+            return this;
+        }
+        
+        public Builder withUserExecutor(Executor executor) {
+            this.executor = executor;
             return this;
         }
         
@@ -182,9 +205,13 @@ public class EtcdClient implements KvStoreClient {
         }
         
         public EtcdClient build() {
-            return new EtcdClient(chanBuilder, defaultTimeoutMs,
-                    name, password, preemptAuth, threads, sessTimeoutSecs);
+            return new EtcdClient(chanBuilder, defaultTimeoutMs, name, password,
+                    preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
         }
+    }
+    
+    private static int defaultThreadCount() {
+        return Math.min(4, Runtime.getRuntime().availableProcessors());
     }
     
     public static Builder forEndpoint(String host, int port) {
@@ -241,7 +268,8 @@ public class EtcdClient implements KvStoreClient {
     
     EtcdClient(NettyChannelBuilder chanBuilder, long defaultTimeoutMs,
             ByteString name, ByteString password, boolean initialAuth,
-            int threads, int sessTimeoutSecs) {
+            int threads, Executor userExecutor, boolean sendViaEventLoop,
+            int sessTimeoutSecs) {
 
         if(name == null && password != null) {
             throw new IllegalArgumentException("password without name");
@@ -250,8 +278,8 @@ public class EtcdClient implements KvStoreClient {
         this.password = password;
         this.sessionTimeoutSecs = sessTimeoutSecs;
         
-        chanBuilder.keepAliveTime(10L, TimeUnit.SECONDS);
-        chanBuilder.keepAliveTimeout(8L, TimeUnit.SECONDS);
+        chanBuilder.keepAliveTime(10L, SECONDS);
+        chanBuilder.keepAliveTimeout(8L, SECONDS);
         
         int connTimeout = Math.min((int)defaultTimeoutMs, 6000);
         chanBuilder.withOption(ChannelOption.CONNECT_TIMEOUT_MILLIS, connTimeout);
@@ -259,22 +287,35 @@ public class EtcdClient implements KvStoreClient {
         //TODO loadbalancer TBD
 //      chanBuilder.loadBalancerFactory(RoundRobinLoadBalancerFactory.getInstance());
         
-        //TODO maybe add RejectedExecutionHandler to avoid exception logs during shutdown
-        executor = new ScheduledThreadPoolExecutor(threads,
-                new ThreadFactoryBuilder().setDaemon(true)
-                .setNameFormat("etcd-sched-pool-%d").build());
+        ThreadFactory tfac = new ThreadFactoryBuilder().setDaemon(true)
+                .setThreadFactory(EtcdEventThread::new)
+                .setNameFormat("etcd-event-pool-%d").build();
         
-        //TODO chan executor TBD
-//      chanBuilder.directExecutor();
-//      chanBuilder.executor(executor);
-        chanBuilder.executor(ForkJoinPool.commonPool());
+        Class<? extends Channel> channelType;
+        if(Epoll.isAvailable()) {
+            this.internalExecutor = new EpollEventLoopGroup(threads, tfac);
+            channelType = EpollSocketChannel.class;
+        } else {
+            this.internalExecutor = new NioEventLoopGroup(threads, tfac);
+            channelType = NioSocketChannel.class;
+        }
+        
+        chanBuilder.eventLoopGroup(internalExecutor).channelType(channelType);
+        this.eventLoops = Iterables.transform(internalExecutor,
+                el -> (SingleThreadEventLoop) el);
+        
+        //TODO default chan executor TBD
+        if(userExecutor == null) userExecutor = ForkJoinPool.commonPool();
+        chanBuilder.executor(userExecutor);
         
         this.channel = chanBuilder.build();
         
         Predicate<Throwable> rr = name != null ? EtcdClient::reauthRequired : null;
         Supplier<CallCredentials> rc = name != null ? this::refreshCredentials : null;
         
-        this.grpc = new GrpcClient(channel, rr, rc, executor, defaultTimeoutMs);
+        this.grpc = new GrpcClient(channel, rr, rc, internalExecutor,
+                () -> Thread.currentThread() instanceof EtcdEventThread,
+                userExecutor, sendViaEventLoop, defaultTimeoutMs);
         if(initialAuth) grpc.authenticateNow();
 
         this.kvClient = new EtcdKvClient(grpc);
@@ -285,40 +326,44 @@ public class EtcdClient implements KvStoreClient {
         if(leaseClient == CLOSED) return;
         kvClient.close();
         synchronized(this) {
-          if(leaseClient instanceof EtcdLeaseClient) {
-              ((EtcdLeaseClient)leaseClient).close();
-          }
-          leaseClient = CLOSED;
-        }
-        // Wait until there are no outstanding non-scheduled tasks before
-        // shutting down the channel. Then wait until the channel has
-        // terminated and there are no outstanding non-scheduled tasks
-        // before shutting down the executor.
-        executor.execute(new Runnable() {
-            @Override public void run() {
-                BlockingQueue<Runnable> queue = executor.getQueue();
-                if(queue.isEmpty() || queue.stream().allMatch(r
-                        -> ((Delayed)r).getDelay(TimeUnit.NANOSECONDS) > 0L)) {
-                    if(executor.getActiveCount() > 1) {
-                        executor.schedule(this, 10L, TimeUnit.MILLISECONDS);
-                    }
-                    else if(channel.isShutdown()) {
-                        executor.shutdown();
-                    }
-                    else try {
-                        channel.shutdown().awaitTermination(3L, TimeUnit.SECONDS);
-                        run();
-                    } catch(InterruptedException ie) {
-                        executor.shutdown();
-                        Thread.currentThread().interrupt();
-                    }
-                }
-                else {
-                    executor.purge();
-                    executor.execute(this);
-                }
+            if(leaseClient instanceof EtcdLeaseClient) {
+                ((EtcdLeaseClient)leaseClient).close();
             }
+            leaseClient = CLOSED;
+        }
+        // Wait until there are no outstanding non-future-scheduled tasks before
+        // shutting down the channel. Then wait until the channel has terminated
+        // and there are no outstanding non-scheduled tasks before shutting down
+        // the executor.
+        executeWhenIdle(() -> {
+            try {
+                channel.shutdown().awaitTermination(2, SECONDS);
+            } catch (InterruptedException e) {}
+            executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS));
         });
+    }
+    
+    final Iterable<SingleThreadEventLoop> eventLoops;
+    
+    /**
+     * Execute the provided task in the EventLoopGroup only once there
+     * are no more running/queued tasks (but might be future scheduled tasks).
+     * The key thing here is that it will continue to wait if new tasks
+     * are scheduled by the already running/queued ones.
+     */
+    private void executeWhenIdle(Runnable task) {
+        CyclicBarrier cb = new CyclicBarrier(internalExecutor.executorCount(), () -> {
+            if(Iterables.all(eventLoops, ex -> ex.pendingTasks() == 0)) task.run();
+            else executeWhenIdle(task);
+        });
+        Runnable await = () -> {
+            try {
+                cb.await();
+            } catch (InterruptedException|BrokenBarrierException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        eventLoops.forEach(ex -> ex.executeAfterEventLoopIteration(await));
     }
     
     public boolean isClosed() {
@@ -423,7 +468,7 @@ public class EtcdClient implements KvStoreClient {
     }
     
     public Executor getExecutor() {
-        return grpc.getExecutor();
+        return grpc.getResponseExecutor();
     }
     
     // ------- utilities
@@ -434,6 +479,12 @@ public class EtcdClient implements KvStoreClient {
     
     protected static boolean contains(String str, String subStr) {
         return str != null && str.contains(subStr);
+    }
+    
+    protected static final class EtcdEventThread extends FastThreadLocalThread {
+        public EtcdEventThread(Runnable r) {
+            super(r);
+        }
     }
     
 }

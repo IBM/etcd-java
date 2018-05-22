@@ -39,7 +39,6 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.ibm.etcd.client.FutureListener;
 import com.ibm.etcd.client.GrpcClient;
-import com.ibm.etcd.client.SerializingExecutor;
 import com.ibm.etcd.client.GrpcClient.ResilientResponseObserver;
 import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
 import com.ibm.etcd.api.LeaseGrantRequest;
@@ -85,9 +84,9 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     
     public EtcdLeaseClient(GrpcClient client) {
         this.client = client;
-        this.ses = client.getExecutor();
-        this.kaReqExecutor = new SerializingExecutor(ses);
-        this.respExecutor = new SerializingExecutor(ses);
+        this.ses = client.getInternalExecutor();
+        this.kaReqExecutor = GrpcClient.serialized(ses, 0);
+        this.respExecutor = GrpcClient.serialized(ses, 0);
     }
     
     // ------ simple lease APIs
@@ -243,9 +242,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     public void close() {
         if(closed) return;
         closed = true;
-        respExecutor.execute(() -> {
-            for(LeaseRecord rec : allLeases) rec.doClose();
-        });
+        for(LeaseRecord rec : allLeases) rec.doClose(); // this is async
     }
     
     boolean streamEstablished = false; // accessed only from responseExecutor
@@ -306,7 +303,8 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
             this.leaseId = leaseId;
             this.observers = observer == null ? new CopyOnWriteArrayList<>()
                     : new CopyOnWriteArrayList<>(Collections.singletonList(observer));
-            this.eventLoop = GrpcClient.serialized(executor != null ? executor : ses, 0);
+            this.eventLoop = GrpcClient.serialized(executor != null ? executor
+                    : client.getResponseExecutor(), 0);
         }
         
         @Override

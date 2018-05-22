@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
@@ -41,6 +42,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.RateLimiter;
 
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
@@ -53,6 +55,7 @@ import io.grpc.stub.ClientCallStreamObserver;
 import io.grpc.stub.ClientCalls;
 import io.grpc.stub.ClientResponseObserver;
 import io.grpc.stub.StreamObserver;
+import io.netty.util.concurrent.OrderedEventExecutor;
 
 
 /**
@@ -72,7 +75,19 @@ public class GrpcClient {
     private final ManagedChannel channel;
     
     protected final ListeningScheduledExecutorService ses;
+    protected final Executor userExecutor;
+    // returns true if the current thread belongs to the internal executor
+    protected final Condition isEventThread;
     
+    // if true (default) all calls to etcd will be made via the shared
+    // internal executor (grpc netty eventloopgroup).
+    // this ensures better concentration of ThreadLocal bytebuf caches
+    // which are allocated on this path
+    protected final boolean sendViaEventLoop;
+    
+    // limit overall rate of immediate retries after failed calls to 1/sec,
+    // to avoid excessive requests when there are connection problems
+    protected final RateLimiter immediateRetryLimiter = RateLimiter.create(1.0);
     
     // modified only by reauthenticate() method
     private CallOptions callOptions = CallOptions.DEFAULT; // volatile tbd - lazy probably ok
@@ -82,19 +97,34 @@ public class GrpcClient {
     public GrpcClient(ManagedChannel channel,
             Predicate<Throwable> reauthRequired,
             Supplier<CallCredentials> credsSupplier,
-            ScheduledExecutorService executor,
-            long defaultTimeoutMs) {
+            ScheduledExecutorService executor, Condition isEventThread, 
+            Executor userExecutor, boolean sendViaEventLoop, long defaultTimeoutMs) {
         Preconditions.checkArgument((reauthRequired == null) == (credsSupplier == null),
                 "must supply both or neither reauth and creds");
         this.channel = channel;
         this.refreshCreds = credsSupplier;
         this.reauthRequired = reauthRequired;
         this.ses = MoreExecutors.listeningDecorator(executor);
+        this.isEventThread = isEventThread;
+        this.userExecutor = userExecutor;
+        this.sendViaEventLoop = sendViaEventLoop;
         this.defaultTimeoutMs = defaultTimeoutMs;
     }
     
+    /**
+     * @deprecated use {@link #getInternalExecutor()}
+     */
+    @Deprecated
     public ScheduledExecutorService getExecutor() {
         return ses;
+    }
+    
+    public ScheduledExecutorService getInternalExecutor() {
+        return ses;
+    }
+    
+    public Executor getResponseExecutor() {
+        return userExecutor;
     }
     
     public void authenticateNow() {
@@ -154,13 +184,19 @@ public class GrpcClient {
         CallOptions callOpts = deadline != null ? baseCallOpts.withDeadline(deadline) : baseCallOpts;
         return Futures.catchingAsync(fuCall(method, request, callOpts, timeoutMs), Exception.class, t -> {
             boolean reauth;
+            // first case: if no retries to do then fail
             if((!backoff && attempt > 0) || (!(reauth = reauthIfRequired(t, baseCallOpts))
                             && !retry.retry(t, request))) return Futures.immediateFailedFuture(t);
-            if(attempt == 0 || reauth) return call(method, precondition, request, retry,
-                    reauth ? attempt : 1, backoff, deadline, timeoutMs);
-            long delay = 500L * (1L << Math.min(attempt-2, 4)); //TODO review backoff pattern
+            // second case: immediate retry (first failure or after auth failure + reauth)
+            if(reauth || attempt == 0 && immediateRetryLimiter.tryAcquire()) {
+                return call(method, precondition, request, retry,
+                        reauth ? attempt : 1, backoff, deadline, timeoutMs);
+            }
+            int nextAttempt = attempt > 0 ? attempt + 1 : 2; // skip attempt # in the rate-limited case
+            // final case: retry after back-off delay
+            long delay = 500L * (1L << Math.min(nextAttempt-2, 4));
             return Futures.dereference(ses.schedule(() -> call(method, precondition, request,
-                    retry, attempt+1, backoff, deadline, timeoutMs), delay, MILLISECONDS));
+                    retry, nextAttempt, backoff, deadline, timeoutMs), delay, MILLISECONDS));
         });
     }
     
@@ -175,20 +211,29 @@ public class GrpcClient {
                 callOptions = callOptions.withDeadline(timeoutDeadline);
             }
         }
+        final CallOptions callOpts = callOptions;
+        return sendViaEventLoop && !isEventThread.satisfied()
+                ? Futures.dereference(ses.submit(() -> fuCall(method, request, callOpts)))
+                        : fuCall(method, request, callOpts);
+    }
+    
+    protected <ReqT,R> ListenableFuture<R> fuCall(MethodDescriptor<ReqT,R> method, ReqT request,
+            CallOptions callOptions) {
         return ClientCalls.futureUnaryCall(channel.newCall(method, callOptions), request);
     }
     
-    protected boolean retryStream(Throwable error, CallOptions callOpts) {
-        return reauthIfRequired(error, callOpts) ||
-                (Status.fromThrowable(error).getCode() != Code.INVALID_ARGUMENT
+    protected boolean retryableStreamError(Throwable error) {
+        return (Status.fromThrowable(error).getCode() != Code.INVALID_ARGUMENT
                 && !causedByJavaError(error));
-
     }
     
     protected static boolean causedByJavaError(Throwable t) {
         return causedBy(t, Error.class);
     }
     
+    /**
+     * @return true if reauthentication was required and attempted
+     */
     protected boolean reauthIfRequired(Throwable error, CallOptions callOpts) {
         if(reauthRequired == null || !reauthRequired.apply(error)) return false;
         reauthenticate(callOpts);
@@ -254,6 +299,9 @@ public class GrpcClient {
         private final ResilientResponseObserver<ReqT,RespT> respStream;
         private final Executor responseExecutor;
         
+        // null if !sendViaEventLoop
+        private final Executor requestExecutor;
+        
         // accessed only from response thread and retry task scheduled
         // from the onError message (prior to stream being reestablished)
         private CallOptions sentCallOptions;
@@ -281,14 +329,15 @@ public class GrpcClient {
             this.method = method;
             this.respStream = respStream;
             this.responseExecutor = serialized(responseExecutor != null
-                    ? responseExecutor : ses, 0);
+                    ? responseExecutor : userExecutor, 0);
+            this.requestExecutor = !sendViaEventLoop ? null : serialized(ses, 0);
         }
         
         // must only be called once - enforcement logic omitted since private
         StreamObserver<ReqT> start() {
             RequestSubStream firstStream = new RequestSubStream();
             userReqStream = firstStream;
-            refreshBackingStream();
+            responseExecutor.execute(this::refreshBackingStream);
             return firstStream;
         }
         
@@ -313,7 +362,12 @@ public class GrpcClient {
                         return;
                     }
                 }
-                rs.onNext(value); // (***)
+                
+                if(requestExecutor == null) rs.onNext(value); // (***)
+                else {
+                    final StreamObserver<ReqT> rsFinal = rs;
+                    requestExecutor.execute(() -> rsFinal.onNext(value));
+                }
             }
             
             // called by user thread
@@ -337,6 +391,7 @@ public class GrpcClient {
                         while((req = pcb.poll()) != null) stream.onNext(req);
                         preConnectBuffer = null;
                     }
+                    initialReqStream = null;
                     if(finished) grpcReqStream = emptyStream();
                     else {
                         grpcReqStream = stream;
@@ -346,9 +401,11 @@ public class GrpcClient {
                 else if(stream == curStream) return false;
                 
                 // here either finished or it's an unexpected new stream
-                Throwable err = error;
-                if(err == null) stream.onCompleted();
-                else stream.onError(err);
+                if(!finished) {
+                    logger.info("Closing unexpected new stream of method "
+                            + method.getFullMethodName());
+                }
+                closeStream(stream, error);
                 return false;
             }
             
@@ -365,21 +422,23 @@ public class GrpcClient {
                     preConnectBuffer = null;
                 }
                 //TODO this *could* overlap with an in-progress
-                //   onNext (***) above, but unlikely
-                // ideas:
-                //    - sync both on the stream itself - not ideal
-                //    - defer until user call is made on the new stream
-                else close(err);
+                //   onNext (***) above in the sendViaEventLoop == false case, but unlikely
+                // for now, delay sending the close to further minimize the chance
+                else close(err, false);
             }
             
             // called from grpc response thread
-            void close(Throwable err) {
+            void close(Throwable err, boolean fromUser) {
                 StreamObserver<ReqT> curStream = grpcReqStream, empty = emptyStream();
                 if(curStream == null || curStream == empty) return;
                 grpcReqStream = empty;
                 //assert preConnectBuffer == null;
-                if(err == null) curStream.onCompleted();
-                else curStream.onError(err);
+                if(fromUser) closeStream(curStream, err);
+                else {
+                    Runnable closeTask = () -> closeStream(curStream, err);
+                    if(requestExecutor != null) requestExecutor.execute(closeTask);
+                    else ses.schedule(closeTask, 400, MILLISECONDS);
+                }
             }
         }
         
@@ -399,7 +458,7 @@ public class GrpcClient {
                     error = err;
                     finished = true;
                 }
-                userReqStream.close(err);
+                userReqStream.close(err, true);
             });
         }
         
@@ -423,10 +482,16 @@ public class GrpcClient {
             }
             // called from grpc response thread
             @Override public void onError(Throwable t) {
-                boolean finalError = finished || !retryStream(t, sentCallOptions);
+                boolean finalError, reauthed = false;
+                if(finished) finalError = true;
+                else {
+                    reauthed = reauthIfRequired(t, sentCallOptions);
+                    finalError = !reauthed && !retryableStreamError(t);
+                }
                 if(!finalError) {
-                    String msg = "retryable onError on underlying stream of method "
-                            +method.getFullMethodName();
+                    int errCount = ++errCounter;
+                    String msg = "retryable onError #"+errCount
+                            +" on underlying stream of method "+method.getFullMethodName();
                     if(logger.isDebugEnabled()) logger.info(msg, t);
                     else logger.info(msg+": "+t.getClass().getName()+": "+t.getMessage());
                     
@@ -440,12 +505,23 @@ public class GrpcClient {
                         // new stream prior to onReplaced returning
                         respStream.onReplaced(userReqStream);
                     }
-                    // else no need to replace user stream
+                    else if(initialReqStream != null) {
+                        // else no need to replace user stream, but cancel outbound stream
+                        initialReqStream.onError(t);
+                        initialReqStream = null;
+                    }
 
-                    int errCount = errCounter++;
-                    if(errCount == 0) refreshBackingStream();
+                    // re-attempt immediately after reauthentication
+                    if(reauthed || (errCount <= 1 && immediateRetryLimiter.tryAcquire())) {
+                        refreshBackingStream();
+                    }
                     else {
-                        long delay = 500L * (1L << Math.min(errCount-2, 4));
+                        if(errCount == 1) errCount++;
+                        // delay stream retry - first time random delay
+                        // between 0.5 and 1.5sec, then 2, 4, 8 secs
+                        long delay = 500L + (errCount == 2 ?
+                                ThreadLocalRandom.current().nextLong(1000L)
+                                : 2000L * (1 << Math.min(errCount-3, 2)));
                         ses.schedule(ResilientBiDiStream.this::refreshBackingStream,
                                 delay, TimeUnit.MILLISECONDS);
                     }
@@ -457,7 +533,11 @@ public class GrpcClient {
             }
             // called from grpc response thread
             @Override public void onCompleted() {
-                //TODO(maybe) reestablish stream in this case if !finished?
+                if(!finished) {
+                    logger.warn("Unexpected onCompleted received"
+                            + " for stream of method "+method.getFullMethodName());
+                  //TODO(maybe) reestablish stream in this case?
+                }
                 sentCallOptions = null;
                 userReqStream.discard(null);
                 respStream.onCompleted();
@@ -465,7 +545,6 @@ public class GrpcClient {
         };
         
         // called only from:
-        // - start() method
         // - grpc response thread
         // - scheduled retry (no active stream)
         private void refreshBackingStream() {
@@ -473,9 +552,13 @@ public class GrpcClient {
             CallOptions callOpts = getCallOptions();
             sentCallOptions = callOpts;
             callOpts = callOpts.withExecutor(responseExecutor);
-            ClientCalls.asyncBidiStreamingCall(channel
+            initialReqStream = ClientCalls.asyncBidiStreamingCall(channel
                     .newCall(method, callOpts), respWrapper);
         }
+        
+        // this is just stored to cancel if the call fails before
+        // being established
+        private StreamObserver<ReqT> initialReqStream;
     }
     
     
@@ -502,6 +585,11 @@ public class GrpcClient {
             fut.cancel(true);
             throw Status.fromThrowable(rte).asRuntimeException();
         }
+    }
+    
+    protected static void closeStream(StreamObserver<?> stream, Throwable err) {
+        if(err == null) stream.onCompleted();
+        else stream.onError(err);
     }
     
     @SuppressWarnings("rawtypes")
@@ -544,6 +632,7 @@ public class GrpcClient {
         return parent instanceof SerializingExecutor
                 || parent instanceof io.grpc.internal.SerializingExecutor
                 || parent == MoreExecutors.directExecutor()
+                || parent instanceof OrderedEventExecutor
                 ? parent : new SerializingExecutor(parent, bufferSize);
     }
 }
