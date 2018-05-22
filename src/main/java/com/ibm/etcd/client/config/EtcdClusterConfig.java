@@ -37,6 +37,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
@@ -228,15 +229,15 @@ public class EtcdClusterConfig {
         private final EtcdClusterConfig config;
         
         CacheKey(EtcdClusterConfig config) {
-            this.config = config;
+            this.config = Preconditions.checkNotNull(config);
         }
         
         // NOTE: rootPrefix is currently intentionally excluded
         // since it's not used to build the client
         @Override
         public boolean equals(Object obj) {
-            if(!(obj instanceof EtcdClusterConfig)) return false;
-            EtcdClusterConfig other = (EtcdClusterConfig) obj;
+            if(!(obj instanceof CacheKey)) return false;
+            EtcdClusterConfig other = ((CacheKey)obj).config;
             return Objects.equals(config.endpoints, other.endpoints)
                     && Objects.equals(config.composeDeployment, other.composeDeployment)
                     && Objects.equals(config.user, other.user)
