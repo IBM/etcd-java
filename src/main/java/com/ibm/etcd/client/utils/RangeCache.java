@@ -50,8 +50,8 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
+import com.ibm.etcd.client.GrpcClient;
 import com.ibm.etcd.client.KeyUtils;
-import com.ibm.etcd.client.SerializingExecutor;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.kv.WatchUpdate;
 import com.ibm.etcd.client.kv.KvClient.Watch;
@@ -99,7 +99,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     private final ByteString fromKey, toKey;
     
-    private final EtcdClient client;
+    private final transient EtcdClient client;
     private final KvClient kvClient;
     private /*final*/ Watch watch;
     
@@ -137,7 +137,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             int diff = Long.compare(kv1.getModRevision(), kv2.getModRevision());
             return diff != 0 ? diff : KeyUtils.compareByteStrings(kv1.getKey(), kv2.getKey());
         });
-        this.listenerExecutor = new SerializingExecutor(client.getExecutor());
+        this.listenerExecutor = GrpcClient.serialized(client.getExecutor(), 0);
     }
     
     /**
