@@ -74,7 +74,7 @@ public class PersistentLeaseKeyTest {
             // reestablish network
             proxy.start();
 
-            assertEquals(mykey, startFuture.get(3000, MILLISECONDS));
+            assertEquals(mykey, startFuture.get(4000, MILLISECONDS));
 
             // check key is present via other client
             assertEquals(bs("defaultdata"), directKvClient.get(mykey).sync().getKvs(0).getValue());

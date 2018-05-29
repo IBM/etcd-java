@@ -518,10 +518,10 @@ public class GrpcClient {
                     else {
                         if(errCount == 1) errCount++;
                         // delay stream retry - first time random delay
-                        // between 0.5 and 1.5sec, then 2, 4, 8 secs
-                        long delay = 500L + (errCount == 2 ?
-                                ThreadLocalRandom.current().nextLong(1000L)
-                                : 2000L * (1 << Math.min(errCount-3, 2)));
+                        // between 0.5 and 1sec, then 2, 4, 8 secs
+                        long delay = 500L + (errCount == 2
+                                ? ThreadLocalRandom.current().nextLong(500L)
+                                        : 2000L * (1 << Math.min(errCount-3, 2)));
                         ses.schedule(ResilientBiDiStream.this::refreshBackingStream,
                                 delay, TimeUnit.MILLISECONDS);
                     }

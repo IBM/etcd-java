@@ -235,9 +235,11 @@ public class RangeCacheTest {
 
                 // wait until connected and to catch up
                 rcClient.getKvClient().get(bs("tmp/")).backoffRetry().sync();
-                Thread.sleep(5_000L);
+                Thread.sleep(6_000L);
                 
                 System.out.println("rc size is "+rc.size());
+                
+                assertEquals(localMap.size(), rc.size());
                 
                 // check contents of cache == contents of local map
                 assertEquals(localMap.entrySet(), Sets.newHashSet(Iterables.transform(rc, kv
