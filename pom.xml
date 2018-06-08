@@ -72,7 +72,8 @@
          <groupId>io.netty</groupId>
          <artifactId>netty-transport-native-epoll</artifactId>
          <version>${netty-version}</version>
-         <classifier>${os.detected.name}-${os.detected.arch}</classifier>
+         <!-- epoll only applicable to linux, won't be used otherwise -->
+         <classifier>linux-x86_64</classifier>
       </dependency>
       <dependency>
          <groupId>io.netty</groupId>
