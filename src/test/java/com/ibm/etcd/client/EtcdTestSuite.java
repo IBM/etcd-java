@@ -19,6 +19,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.AfterClass;
@@ -53,15 +54,15 @@ public class EtcdTestSuite {
             if(!ok) tearDown();
         }
     }
- 
+
     @AfterClass
     public static void tearDown() throws IOException {
         if(etcdProcess!=null) etcdProcess.destroy();
     }
-    
+
     static void waitForStartup() throws Exception {
         if(etcdProcess == null) return;
-        TimeLimiter tl = new SimpleTimeLimiter();
+        TimeLimiter tl = SimpleTimeLimiter.create(Executors.newCachedThreadPool());
         tl.callWithTimeout(() -> {
             Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
             BufferedReader br = new BufferedReader(isr);
@@ -71,7 +72,7 @@ public class EtcdTestSuite {
                 System.out.println(line);
             }
             return null;
-        }, 10L, TimeUnit.SECONDS, true);
+        }, 10L, TimeUnit.SECONDS);
     }
-    
+
 }

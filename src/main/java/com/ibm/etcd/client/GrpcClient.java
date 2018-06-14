@@ -195,11 +195,14 @@ public class GrpcClient {
             int nextAttempt = attempt > 0 ? attempt + 1 : 2; // skip attempt # in the rate-limited case
             // final case: retry after back-off delay
             long delay = 500L * (1L << Math.min(nextAttempt-2, 4));
-            return Futures.dereference(ses.schedule(() -> call(method, precondition, request,
-                    retry, nextAttempt, backoff, deadline, timeoutMs), delay, MILLISECONDS));
-        });
+            return Futures.scheduleAsync(
+                    () -> call(method, precondition, request, retry, nextAttempt, backoff, deadline, timeoutMs),
+                    delay,
+                    MILLISECONDS,
+                    ses);
+        }, MoreExecutors.directExecutor());
     }
-    
+
     //TODO(maybe) for retriable RPCs consider fail-fast first timeout and longer retry timeout
     protected <ReqT,R> ListenableFuture<R> fuCall(MethodDescriptor<ReqT,R> method, ReqT request,
             CallOptions callOptions, long timeoutMs) {
@@ -213,7 +216,7 @@ public class GrpcClient {
         }
         final CallOptions callOpts = callOptions;
         return sendViaEventLoop && !isEventThread.satisfied()
-                ? Futures.dereference(ses.submit(() -> fuCall(method, request, callOpts)))
+                ? Futures.submitAsync(() -> fuCall(method, request, callOpts), ses)
                         : fuCall(method, request, callOpts);
     }
     
