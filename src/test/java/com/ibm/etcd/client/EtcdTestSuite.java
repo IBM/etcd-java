@@ -40,7 +40,7 @@ import com.ibm.etcd.client.utils.RangeCacheTest;
 public class EtcdTestSuite {
 
     static Process etcdProcess;
-    
+
     @BeforeClass
     public static void setUp() throws Exception {
         boolean ok = false;
@@ -65,16 +65,19 @@ public class EtcdTestSuite {
         if(etcdProcess == null) return;
         ExecutorService es = Executors.newSingleThreadExecutor();
         TimeLimiter tl = SimpleTimeLimiter.create(es);
-        tl.callWithTimeout(() -> {
-            Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
-            BufferedReader br = new BufferedReader(isr);
-            String line;
-            while((line = br.readLine()) != null &&
-                    !line.contains("ready to serve client requests")) {
-                System.out.println(line);
-            }
-            return null;
-        }, 10L, TimeUnit.SECONDS);
+        try {
+            tl.callWithTimeout(() -> {
+                Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
+                BufferedReader br = new BufferedReader(isr);
+                String line;
+                while((line = br.readLine()) != null &&
+                        !line.contains("ready to serve client requests")) {
+                    System.out.println(line);
+                }
+                return null;
+            }, 10L, TimeUnit.SECONDS);
+        } finally {
+            es.shutdown();
+        }
     }
-
 }
