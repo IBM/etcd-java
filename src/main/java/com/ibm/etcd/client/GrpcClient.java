@@ -197,9 +197,7 @@ public class GrpcClient {
             long delay = 500L * (1L << Math.min(nextAttempt-2, 4));
             return Futures.scheduleAsync(
                     () -> call(method, precondition, request, retry, nextAttempt, backoff, deadline, timeoutMs),
-                    delay,
-                    MILLISECONDS,
-                    ses);
+                    delay, MILLISECONDS, ses);
         }, MoreExecutors.directExecutor());
     }
 
