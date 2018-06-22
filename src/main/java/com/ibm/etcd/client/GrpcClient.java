@@ -606,7 +606,7 @@ public class GrpcClient {
     }
 
     protected static <T> Predicate<T> constantPredicate(boolean val) {
-        return val ? Predicates.<T>alwaysTrue() : Predicates.<T>alwaysFalse();
+        return val ? Predicates.alwaysTrue() : Predicates.alwaysFalse();
     }
     
     protected static boolean contains(String str, String subStr) {

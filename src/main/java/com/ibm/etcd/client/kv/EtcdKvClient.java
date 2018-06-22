@@ -485,7 +485,7 @@ public class EtcdKvClient implements KvClient {
             @Override
             public FluentTxnOps<?> elseDo() {
                 succ = false;
-                return (FluentTxnOps<?>)this;
+                return this;
             }
             @Override
             public FluentTxnSuccOps put(PutRequestOrBuilder putReq) {

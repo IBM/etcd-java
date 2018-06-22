@@ -184,7 +184,7 @@ public class EtcdWatchClient implements Closeable {
                 }
                 else processCancelledResponse(wr);
             } else {
-                boolean first = this.watchId < 0, veryFirst = this.watchId == -2;;
+                boolean first = this.watchId < 0, veryFirst = this.watchId == -2;
                 this.watchId = newWatchId;
                 if(activeWatchers.putIfAbsent(newWatchId, this) == null) {
                     if(userCancelled) sendCancel(watchId);

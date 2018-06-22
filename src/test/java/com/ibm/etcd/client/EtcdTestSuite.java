@@ -57,7 +57,7 @@ public class EtcdTestSuite {
     }
 
     @AfterClass
-    public static void tearDown() throws IOException {
+    public static void tearDown() {
         if(etcdProcess!=null) etcdProcess.destroy();
     }
 

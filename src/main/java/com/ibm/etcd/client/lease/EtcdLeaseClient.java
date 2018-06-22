@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client.lease;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -538,7 +539,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                     //TODO convert to use common GrpcClient retry logic probably
                     ses.schedule(LeaseRecord.this::revoke, 2, SECONDS);
                 }
-            });
+            }, directExecutor());
         }
         
         //TODO TBD external getter field visibility/mutual consistency
