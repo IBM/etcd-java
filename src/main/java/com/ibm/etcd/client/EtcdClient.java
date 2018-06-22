@@ -18,6 +18,7 @@ package com.ibm.etcd.client;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -175,7 +176,7 @@ public class EtcdClient implements KvStoreClient {
         }
         
         public Builder withPlainText() {
-            chanBuilder.usePlaintext(true);
+            chanBuilder.usePlaintext();
             return this;
         }
         
@@ -386,8 +387,10 @@ public class EtcdClient implements KvStoreClient {
             private Metadata tokenHeader; //TODO volatile TBD
             private final long authTime = System.currentTimeMillis();
             private final ListenableFuture<Metadata> futureTokenHeader =
-                    Futures.transform(authenticate(),
-                            (Function<AuthenticateResponse,Metadata>)ar -> tokenHeader = tokenHeader(ar));
+                    Futures.transform(
+                            authenticate(),
+                            (Function<AuthenticateResponse,Metadata>)ar -> tokenHeader = tokenHeader(ar),
+                            MoreExecutors.directExecutor());
             @Override
             public void applyRequestMetadata(MethodDescriptor<?, ?> method, Attributes attrs,
                     Executor appExecutor, MetadataApplier applier) {
@@ -424,9 +427,12 @@ public class EtcdClient implements KvStoreClient {
                 .setNameBytes(name).setPasswordBytes(password).build();
         // no call creds for auth call
         CallOptions callOpts = CallOptions.DEFAULT;
-        return Futures.catchingAsync(grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
-                Exception.class, ex -> !retryAuthRequest(ex) ? Futures.immediateFailedFuture(ex)
-                : grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L));
+        return Futures.catchingAsync(
+                grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
+                Exception.class, ex -> !retryAuthRequest(ex)
+                        ? Futures.immediateFailedFuture(ex)
+                        : grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
+                MoreExecutors.directExecutor());
     }
     
     protected static boolean retryAuthRequest(Throwable error) {

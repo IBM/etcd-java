@@ -19,6 +19,7 @@ import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
+import com.google.common.util.concurrent.MoreExecutors;
 import java.io.Closeable;
 import java.util.Collections;
 import java.util.Set;
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -529,6 +531,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         private void revoke() {
             if(leaseId == 0L || getCurrentTtlSecs() <= 0) return;
             ListenableFuture<LeaseRevokeResponse> fut = EtcdLeaseClient.this.revoke(leaseId);
+            Executor executor = MoreExecutors.directExecutor();
             Futures.addCallback(fut, (FutureListener<LeaseRevokeResponse>) (v,t) -> {
                 if(t == null || GrpcClient.codeFromThrowable(t) == Code.NOT_FOUND) {
                     expiryTimeMs = 0L;
@@ -538,7 +541,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                     //TODO convert to use common GrpcClient retry logic probably
                     ses.schedule(LeaseRecord.this::revoke, 2, SECONDS);
                 }
-            });
+            }, executor);
         }
         
         //TODO TBD external getter field visibility/mutual consistency

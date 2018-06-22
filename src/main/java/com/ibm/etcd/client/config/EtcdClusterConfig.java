@@ -209,9 +209,10 @@ public class EtcdClusterConfig {
         try {
             return clientCache.get(new CacheKey(config), config::newClient);
         } catch(ExecutionException ee) {
-            Throwables.propagateIfInstanceOf(ee.getCause(), IOException.class);
-            Throwables.propagateIfInstanceOf(ee.getCause(), CertificateException.class);
-            throw Throwables.propagate(ee.getCause());
+            Throwables.throwIfInstanceOf(ee.getCause(), IOException.class);
+            Throwables.throwIfInstanceOf(ee.getCause(), CertificateException.class);
+            Throwables.throwIfUnchecked(ee.getCause());
+            throw new RuntimeException(ee.getCause());
         }
     }
     

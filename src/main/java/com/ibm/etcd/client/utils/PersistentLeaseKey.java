@@ -168,9 +168,10 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
                     .elseDo().put(putBld.setIgnoreValue(false).setValue(defaultValue)).get(getOp)
                     .async();
             fut = Futures.transform(txnFut, (Function<TxnResponse,Object>)tr
-                    -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false));
+                    -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false),
+                    MoreExecutors.directExecutor());
         }
-        if(!isDone()) fut = Futures.transform(fut, (Function<Object,Object>) r -> set(key));
+        if(!isDone()) fut = Futures.transform(fut, (Function<Object,Object>) r -> set(key), MoreExecutors.directExecutor());
         // this callback is to trigger an immediate retry in case the attempt was cancelled by a more
         // recent lease state change to active
         Futures.addCallback(fut, (FutureListener<Object>) (v,t) -> {

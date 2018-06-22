@@ -157,6 +157,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     // internal method - should not be called while watch is active
     protected ListenableFuture<Boolean> fullRefreshCache() {
+        Executor executor = MoreExecutors.directExecutor();
         ListenableFuture<List<RangeResponse>> rrfut;
         long seenUpTo = seenUpToRev;
         boolean firstTime = (seenUpTo == 0L);
@@ -165,8 +166,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
-            rrfut = Futures.transform(rrf, (Function<RangeResponse,List<RangeResponse>>) rr
-                    -> Collections.singletonList(rr));
+            rrfut = Futures.transform(rrf, Collections::singletonList, executor);
         } else {
             // in case the local cache is large, reduce data transfer by requesting
             // just keys, and full key+value only for those modified since seenUpToRev
@@ -180,9 +180,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     .get(newModsReq).get(otherKeysReq)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
-            rrfut = Futures.transform(trf, (Function<TxnResponse,List<RangeResponse>>) tr
-                    -> tr.getResponsesList().stream().map(r
-                            -> r.getResponseRange()).collect(Collectors.toList()));
+            rrfut = Futures.transform(
+                    trf,
+                    tr -> tr.getResponsesList().stream().map(ResponseOp::getResponseRange).collect(Collectors.toList()),
+                    executor);
         }
         
         return Futures.transformAsync(rrfut, rrs -> {
