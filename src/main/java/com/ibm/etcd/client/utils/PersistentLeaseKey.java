@@ -15,14 +15,14 @@
  */
 package com.ibm.etcd.client.utils;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executor;
 
-import com.google.common.base.Function;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
@@ -167,11 +167,11 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
             txnFut = req.then().put(putBld.setIgnoreValue(true)).get(getOp)
                     .elseDo().put(putBld.setIgnoreValue(false).setValue(defaultValue)).get(getOp)
                     .async();
-            fut = Futures.transform(txnFut, (Function<TxnResponse,Object>)tr
-                    -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false),
-                    MoreExecutors.directExecutor());
+            fut = Futures.transform(txnFut,
+                    tr -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false),
+                    directExecutor());
         }
-        if(!isDone()) fut = Futures.transform(fut, (Function<Object,Object>) r -> set(key), MoreExecutors.directExecutor());
+        if(!isDone()) fut = Futures.transform(fut, r -> set(key), directExecutor());
         // this callback is to trigger an immediate retry in case the attempt was cancelled by a more
         // recent lease state change to active
         Futures.addCallback(fut, (FutureListener<Object>) (v,t) -> {
@@ -220,6 +220,6 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     private void deleteKey() {
         client.getKvClient().delete(key)
         .backoffRetry(() -> lease.getState() != LeaseState.CLOSED).async()
-        .addListener(() -> closeFuture.set(null), MoreExecutors.directExecutor());
+        .addListener(() -> closeFuture.set(null), directExecutor());
     }
 }

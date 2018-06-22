@@ -18,7 +18,6 @@ package com.ibm.etcd.client;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-import com.google.common.util.concurrent.MoreExecutors;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -42,7 +41,6 @@ import java.util.regex.Pattern;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
 
-import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Iterables;
@@ -387,10 +385,7 @@ public class EtcdClient implements KvStoreClient {
             private Metadata tokenHeader; //TODO volatile TBD
             private final long authTime = System.currentTimeMillis();
             private final ListenableFuture<Metadata> futureTokenHeader =
-                    Futures.transform(
-                            authenticate(),
-                            (Function<AuthenticateResponse,Metadata>)ar -> tokenHeader = tokenHeader(ar),
-                            MoreExecutors.directExecutor());
+                    Futures.transform(authenticate(), ar -> tokenHeader = tokenHeader(ar), directExecutor());
             @Override
             public void applyRequestMetadata(MethodDescriptor<?, ?> method, Attributes attrs,
                     Executor appExecutor, MetadataApplier applier) {
@@ -432,7 +427,7 @@ public class EtcdClient implements KvStoreClient {
                 Exception.class, ex -> !retryAuthRequest(ex)
                         ? Futures.immediateFailedFuture(ex)
                         : grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
-                MoreExecutors.directExecutor());
+                directExecutor());
     }
     
     protected static boolean retryAuthRequest(Throwable error) {

@@ -44,7 +44,6 @@ import javax.annotation.concurrent.GuardedBy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Function;
 import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -181,10 +180,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     .get(newModsReq).get(otherKeysReq)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
-            rrfut = Futures.transform(
-                    trf,
-                    tr -> tr.getResponsesList().stream().map(ResponseOp::getResponseRange).collect(Collectors.toList()),
-                    executor);
+            rrfut = Futures.transform(trf,
+                    tr -> tr.getResponsesList().stream().map(ResponseOp::getResponseRange).collect(Collectors.toList()), executor);
         }
         
         return Futures.transformAsync(rrfut, rrs -> {
