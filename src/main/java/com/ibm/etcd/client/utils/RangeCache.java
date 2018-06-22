@@ -17,6 +17,7 @@ package com.ibm.etcd.client.utils;
 
 import static com.ibm.etcd.client.GrpcClient.waitFor;
 
+import com.ibm.etcd.api.ResponseOp;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;

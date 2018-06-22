@@ -181,7 +181,7 @@ public class RangeCacheTest {
                         } catch(Exception e) {
                             e.printStackTrace();
                         }
-                    };
+                    }
                 };
                 proxyThread.start();
 

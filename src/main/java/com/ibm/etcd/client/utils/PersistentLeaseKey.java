@@ -156,7 +156,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         PutRequest.Builder putBld = PutRequest.newBuilder().setKey(key).setLease(leaseId);
         KvClient.FluentTxnRequest req = client.getKvClient().txnIf().exists(key)
                 .backoffRetry(() -> closeFuture == null && isActive());
-        ListenableFuture<? extends Object> fut;
+        ListenableFuture<?> fut;
         ListenableFuture<TxnResponse> txnFut;
         if(rangeCache == null) {
             fut = txnFut = req.then().put(putBld.setIgnoreValue(true))

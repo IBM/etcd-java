@@ -228,7 +228,7 @@ public class WatchTest {
                         } catch(Exception e) {
                             e.printStackTrace();
                         }
-                    };
+                    }
                 };
                 proxyThread.start();
 
