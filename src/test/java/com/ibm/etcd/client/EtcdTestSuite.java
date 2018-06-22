@@ -19,6 +19,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.AfterClass;
@@ -38,7 +40,7 @@ import com.ibm.etcd.client.utils.RangeCacheTest;
 public class EtcdTestSuite {
 
     static Process etcdProcess;
-    
+
     @BeforeClass
     public static void setUp() throws Exception {
         boolean ok = false;
@@ -53,25 +55,29 @@ public class EtcdTestSuite {
             if(!ok) tearDown();
         }
     }
- 
+
     @AfterClass
     public static void tearDown() throws IOException {
         if(etcdProcess!=null) etcdProcess.destroy();
     }
-    
+
     static void waitForStartup() throws Exception {
         if(etcdProcess == null) return;
-        TimeLimiter tl = new SimpleTimeLimiter();
-        tl.callWithTimeout(() -> {
-            Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
-            BufferedReader br = new BufferedReader(isr);
-            String line;
-            while((line = br.readLine()) != null &&
-                    !line.contains("ready to serve client requests")) {
-                System.out.println(line);
-            }
-            return null;
-        }, 10L, TimeUnit.SECONDS, true);
+        ExecutorService es = Executors.newSingleThreadExecutor();
+        TimeLimiter tl = SimpleTimeLimiter.create(es);
+        try {
+            tl.callWithTimeout(() -> {
+                Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
+                BufferedReader br = new BufferedReader(isr);
+                String line;
+                while((line = br.readLine()) != null &&
+                        !line.contains("ready to serve client requests")) {
+                    System.out.println(line);
+                }
+                return null;
+            }, 10L, TimeUnit.SECONDS);
+        } finally {
+            es.shutdown();
+        }
     }
-    
 }
