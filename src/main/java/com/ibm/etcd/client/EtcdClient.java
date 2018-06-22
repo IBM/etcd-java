@@ -174,7 +174,7 @@ public class EtcdClient implements KvStoreClient {
         }
         
         public Builder withPlainText() {
-            chanBuilder.usePlaintext();
+            chanBuilder.usePlaintext(true);
             return this;
         }
         
