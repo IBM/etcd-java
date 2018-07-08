@@ -322,7 +322,7 @@ public class GrpcClient {
          * 
          * @param method
          * @param respStream
-         * @param responseExecutor must be serialized
+         * @param responseExecutor
          */
         public ResilientBiDiStream(MethodDescriptor<ReqT,RespT> method,
                 ResilientResponseObserver<ReqT,RespT> respStream,
@@ -330,8 +330,8 @@ public class GrpcClient {
             this.method = method;
             this.respStream = respStream;
             this.responseExecutor = serialized(responseExecutor != null
-                    ? responseExecutor : userExecutor, 0);
-            this.requestExecutor = !sendViaEventLoop ? null : serialized(ses, 0);
+                    ? responseExecutor : userExecutor);
+            this.requestExecutor = !sendViaEventLoop ? null : serialized(ses);
         }
         
         // must only be called once - enforcement logic omitted since private
@@ -627,6 +627,10 @@ public class GrpcClient {
                     if("equals".equals(m.getName())) return a[0] == p;
                     throw new IllegalStateException("attempt to invoke sentinel");
                 });
+    }
+    
+    public static Executor serialized(Executor parent) {
+        return serialized(parent, 0);
     }
     
     public static Executor serialized(Executor parent, int bufferSize) {

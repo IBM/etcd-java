@@ -210,7 +210,7 @@ public class EtcdClient implements KvStoreClient {
     }
     
     private static int defaultThreadCount() {
-        return Math.min(4, Runtime.getRuntime().availableProcessors());
+        return Math.min(8, Runtime.getRuntime().availableProcessors());
     }
     
     public static Builder forEndpoint(String host, int port) {
@@ -342,6 +342,7 @@ public class EtcdClient implements KvStoreClient {
         });
     }
     
+    // used only in clean shutdown logic
     final Iterable<SingleThreadEventLoop> eventLoops;
     
     /**

@@ -137,7 +137,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             int diff = Long.compare(kv1.getModRevision(), kv2.getModRevision());
             return diff != 0 ? diff : KeyUtils.compareByteStrings(kv1.getKey(), kv2.getKey());
         });
-        this.listenerExecutor = GrpcClient.serialized(client.getExecutor(), 0);
+        this.listenerExecutor = GrpcClient.serialized(client.getExecutor());
     }
     
     /**
@@ -211,8 +211,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             Watch newWatch = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
                     .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor)
                     .start(new StreamObserver<WatchUpdate>() {
-
-                        @Override public void onNext(WatchUpdate update) {
+                        @Override
+                        public void onNext(WatchUpdate update) {
                             List<Event> events = update.getEvents();
                             int eventCount = events != null ? events.size() : 0;
                             if(eventCount > 0) for(Event event : events) {
@@ -234,7 +234,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                             revisionUpdate(eventCount == 0 ? update.getHeader().getRevision() - 1L
                                     : events.get(eventCount-1).getKv().getModRevision());
                         }
-                        @Override public void onCompleted() {
+                        @Override
+                        public void onCompleted() {
                             // should only happen after external close()
                             if(!closed) {
                                 if(!client.isClosed()) {
@@ -243,7 +244,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                                 close();
                             }
                         }
-                        @Override public void onError(Throwable t) {
+                        @Override
+                        public void onError(Throwable t) {
                             logger.error("Watch failed with exception ", t);
                             if(t instanceof RevisionCompactedException) synchronized(RangeCache.this) {
                                 // fail if happens during start, otherwise refresh

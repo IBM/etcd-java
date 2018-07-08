@@ -80,7 +80,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     public PersistentLeaseKey(EtcdClient client, PersistentLease lease,
             ByteString key, ByteString defaultValue, RangeCache rangeCache) {
         this.client = client;
-        //TODO if rangeCache != null, verify key lies within it's range
+        //TODO if rangeCache != null, verify key lies within its range
         this.rangeCache = rangeCache;
         this.lease = lease;
         this.key = key;
@@ -108,7 +108,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
      * @param client
      * @param key
      * @param defaultValue
-     * @param rangeCache
+     * @param rangeCache optional, may be null
      */
     public PersistentLeaseKey(EtcdClient client,
             ByteString key, ByteString defaultValue, RangeCache rangeCache) {
@@ -119,7 +119,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         if(executor != null) throw new IllegalStateException("already started");
         if(closeFuture != null) throw new IllegalStateException("closed");
         //TODO TBD or have lease expose its response executor
-        executor = GrpcClient.serialized(client.getExecutor(), 0);
+        executor = GrpcClient.serialized(client.getExecutor());
         if(lease == null) lease = client.getSessionLease();
         lease.addStateObserver(stateObserver, true);
     }

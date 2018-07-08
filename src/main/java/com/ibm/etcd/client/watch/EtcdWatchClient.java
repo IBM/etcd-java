@@ -93,7 +93,7 @@ public class EtcdWatchClient implements Closeable {
     public EtcdWatchClient(GrpcClient client, Executor executor) {
         this.client = client;
         this.observerExecutor = executor != null ? executor : ForkJoinPool.commonPool();
-        this.eventLoop = GrpcClient.serialized(client.getInternalExecutor(), 128); // bounded for back-pressure
+        this.eventLoop = GrpcClient.serialized(client.getInternalExecutor());
     }
     
     /**
@@ -120,7 +120,7 @@ public class EtcdWatchClient implements Closeable {
             long rev = request.getStartRevision();
             this.upToRevision = rev - 1;
             // bounded for back-pressure
-            this.watcherExecutor = GrpcClient.serialized(parentExecutor, 64);
+            this.watcherExecutor = GrpcClient.serialized(parentExecutor);
         }
 
         // null => cancelled (non-error)

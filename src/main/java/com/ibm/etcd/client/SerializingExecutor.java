@@ -16,9 +16,10 @@
 package com.ibm.etcd.client;
 
 import java.util.Queue;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
@@ -35,7 +36,6 @@ public class SerializingExecutor implements Executor {
     
 	private final Executor sharedPool;
 	private final Queue<Runnable> workQueue;
-	private final boolean bounded;
 	private volatile boolean scheduled = false;
 	
 	public SerializingExecutor(Executor parentPool) {
@@ -45,8 +45,7 @@ public class SerializingExecutor implements Executor {
 	public SerializingExecutor(Executor parentPool, int capacity) {
         if(parentPool == null) throw new NullPointerException();
         this.sharedPool = parentPool;
-        this.bounded = capacity > 0;
-        this.workQueue = bounded ? new ArrayBlockingQueue<>(capacity)
+        this.workQueue = capacity > 0 ? new LinkedBlockingQueue<>(capacity)
                 : new ConcurrentLinkedQueue<>();
     }
 	
@@ -89,12 +88,9 @@ public class SerializingExecutor implements Executor {
 	
 	@Override
 	public void execute(Runnable command) {
-	    if(bounded) try {
-            ((ArrayBlockingQueue<Runnable>)workQueue).put(command);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e); //TODO TBD
-        }
-	    else workQueue.offer(command);
+	    if(!workQueue.offer(command)) {
+	        throw new RejectedExecutionException("SerializingExecutor work queue full");
+	    }
 	        
 		if(!scheduled) {
 			boolean doit = false;

@@ -86,8 +86,8 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     public EtcdLeaseClient(GrpcClient client) {
         this.client = client;
         this.ses = client.getInternalExecutor();
-        this.kaReqExecutor = GrpcClient.serialized(ses, 0);
-        this.respExecutor = GrpcClient.serialized(ses, 0);
+        this.kaReqExecutor = GrpcClient.serialized(ses);
+        this.respExecutor = GrpcClient.serialized(ses);
     }
     
     // ------ simple lease APIs
@@ -305,7 +305,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
             this.observers = observer == null ? new CopyOnWriteArrayList<>()
                     : new CopyOnWriteArrayList<>(Collections.singletonList(observer));
             this.eventLoop = GrpcClient.serialized(executor != null ? executor
-                    : client.getResponseExecutor(), 0);
+                    : client.getResponseExecutor());
         }
         
         @Override
