@@ -29,6 +29,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import javax.net.ssl.SSLException;
@@ -287,8 +288,8 @@ public class EtcdClient implements KvStoreClient {
             try {
                 channel.shutdown().awaitTermination(2, SECONDS);
             } catch (InterruptedException e) {}
-            executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS));
-        });
+            executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS), false);
+        }, true);
     }
     
     // used only in clean shutdown logic
@@ -300,19 +301,34 @@ public class EtcdClient implements KvStoreClient {
      * The key thing here is that it will continue to wait if new tasks
      * are scheduled by the already running/queued ones.
      */
-    private void executeWhenIdle(Runnable task) {
+    private void executeWhenIdle(Runnable task, boolean yield) {
+        AtomicInteger remainingTasks = new AtomicInteger(-1);
+        // Two "cycles" are performed, the first with remainingTasks == -1.
+        // If remainingTasks > 0 after the second cycle, this method
+        // is re-called recursively (in an async context)
         CyclicBarrier cb = new CyclicBarrier(internalExecutor.executorCount(), () -> {
-            if(Iterables.all(eventLoops, ex -> ex.pendingTasks() == 0)) task.run();
-            else executeWhenIdle(task);
+            int rt = remainingTasks.get();
+            if(rt == -1) remainingTasks.incrementAndGet();
+            else if(rt > 0) executeWhenIdle(task, yield);
+            else if(yield) internalExecutor.execute(task);
+            else task.run();
         });
-        Runnable await = () -> {
-            try {
-                cb.await();
-            } catch (InterruptedException|BrokenBarrierException e) {
-                Thread.currentThread().interrupt();
-            }
-        };
-        eventLoops.forEach(ex -> ex.executeAfterEventLoopIteration(await));
+        eventLoops.forEach(ex -> {
+            ex.execute(new Runnable() {
+                @Override public void run() {
+                    try {
+                        if(ex.pendingTasks() > 0) ex.execute(this);
+                        else {
+                            cb.await();
+                            if(ex.pendingTasks() > 0) remainingTasks.incrementAndGet();
+                            cb.await();
+                        }
+                    } catch (InterruptedException|BrokenBarrierException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            });
+        });
     }
     
     public boolean isClosed() {
