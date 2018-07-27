@@ -20,12 +20,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.net.URI;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
@@ -35,8 +30,6 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
@@ -61,12 +54,10 @@ import com.ibm.etcd.client.lease.PersistentLease;
 import io.grpc.Attributes;
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
-import io.grpc.EquivalentAddressGroup;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.Metadata.Key;
 import io.grpc.MethodDescriptor;
-import io.grpc.NameResolver;
 import io.grpc.Status;
 import io.grpc.Status.Code;
 import io.grpc.internal.GrpcUtil;
@@ -92,14 +83,8 @@ public class EtcdClient implements KvStoreClient {
     private static final MethodDescriptor<AuthenticateRequest,AuthenticateResponse> METHOD_AUTHENTICATE =
             AuthGrpc.getAuthenticateMethod();
     
-    protected static final String ETCD = "etcd";
-    
     public static final int DEFAULT_PORT = 2379; // default etcd server port
-    
-    // (not intended to be strict hostname validation here)
-    protected static final Pattern ADDR_PATT =
-            Pattern.compile("(?:https?://)?([a-zA-Z0-9\\-.]+)(?::(\\d+))?");
-    
+
     private static final LeaseClient CLOSED =
             GrpcClient.sentinel(LeaseClient.class);
 
@@ -219,45 +204,9 @@ public class EtcdClient implements KvStoreClient {
     }
     
     public static Builder forEndpoints(List<String> endpoints) {
-        NettyChannelBuilder ncb = NettyChannelBuilder.forTarget(ETCD)
-                .nameResolverFactory(new NameResolver.Factory() {
-            @Override
-            public NameResolver newNameResolver(URI targetUri, Attributes params) {
-                if(!ETCD.equals(targetUri.getScheme())) return null;
-                return new NameResolver() {
-                    @Override
-                    public void start(Listener listener) {
-                        List<SocketAddress> addrList = new ArrayList<>(endpoints.size());
-                        try {
-                            for(String endpoint : endpoints) {
-                                Matcher m = ADDR_PATT.matcher(endpoint.trim());
-                                if(!m.matches()) throw new Exception("invalid endpoint: "+endpoint);
-                                String hostname = m.group(1), portStr = m.group(2);
-                                int port = portStr != null
-                                        ? Integer.parseInt(portStr) : DEFAULT_PORT;
-                                addrList.add(new InetSocketAddress(hostname, port));
-                            }
-                            Collections.shuffle(addrList);
-                            listener.onAddresses(Collections.singletonList(new EquivalentAddressGroup(addrList)),
-                                    Attributes.EMPTY);
-                        } catch(Exception e) {
-                            listener.onError(Status.INVALID_ARGUMENT.withCause(e).withDescription(e.getMessage()));
-                        }
-                    }
-                    @Override
-                    public String getServiceAuthority() {
-                        return ETCD;
-                    }
-                    @Override
-                    public void shutdown() {}
-                };
-            }
-            @Override
-            public String getDefaultScheme() {
-                return ETCD;
-            }
-        });
-        
+        NettyChannelBuilder ncb = NettyChannelBuilder
+                .forTarget(StaticEtcdNameResolverFactory.ETCD)
+                .nameResolverFactory(new StaticEtcdNameResolverFactory(endpoints));
         return new Builder(ncb);
     }
     
