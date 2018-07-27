@@ -26,10 +26,12 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -38,11 +40,13 @@ import org.slf4j.LoggerFactory;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
+import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.RateLimiter;
+import com.google.common.util.concurrent.Uninterruptibles;
 
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
@@ -155,7 +159,14 @@ public class GrpcClient {
     
     public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             ReqT request, boolean idempotent) {
-        return call(method, null, request, retryDecision(idempotent), 0, false, null, 0L);
+        return call(method, null, request, null, retryDecision(idempotent),
+                0, false, null, 0L);
+    }
+    
+    public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
+            ReqT request, boolean idempotent, long timeoutMillis, Executor executor) {
+        return call(method, null, request, executor, retryDecision(idempotent),
+                0, false, null, timeoutMillis);
     }
     
     //TODO probably move this
@@ -163,17 +174,16 @@ public class GrpcClient {
         boolean retry(Throwable t, ReqT request);
     }
     
-    public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
-            Condition precondition, ReqT request, RetryDecision<ReqT> retry,
-            boolean backoff, Deadline deadline, long timeoutMs) {
-        return call(method, precondition, request, retry, 0,
-                backoff, null, timeoutMs);
+    public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method, Condition precondition,
+            ReqT request, Executor executor, RetryDecision<ReqT> retry, boolean backoff,
+            Deadline deadline, long timeoutMs) {
+        return call(method, precondition, request, executor, retry, 0, backoff, null, timeoutMs);
     }
     
     // deadline is for entire request  (including retry pauses),
     // timeout is per-attempt and 0 means not specified
     private <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
-            Condition precondition, ReqT request, RetryDecision<ReqT> retry,
+            Condition precondition, ReqT request, Executor executor, RetryDecision<ReqT> retry,
             int attempt, boolean backoff, Deadline deadline, long timeoutMs) {
         if(precondition != null && !precondition.satisfied()) {
             return Futures.immediateFailedFuture(new CancellationException("precondition false"));
@@ -182,6 +192,7 @@ public class GrpcClient {
         //     skip attempt (and dont increment attempt #)
         final CallOptions baseCallOpts = getCallOptions();
         CallOptions callOpts = deadline != null ? baseCallOpts.withDeadline(deadline) : baseCallOpts;
+        if(executor != null) callOpts = callOpts.withExecutor(executor);
         return Futures.catchingAsync(fuCall(method, request, callOpts, timeoutMs), Exception.class, t -> {
             boolean reauth;
             // first case: if no retries to do then fail
@@ -189,15 +200,14 @@ public class GrpcClient {
                             && !retry.retry(t, request))) return Futures.immediateFailedFuture(t);
             // second case: immediate retry (first failure or after auth failure + reauth)
             if(reauth || attempt == 0 && immediateRetryLimiter.tryAcquire()) {
-                return call(method, precondition, request, retry,
+                return call(method, precondition, request, executor, retry,
                         reauth ? attempt : 1, backoff, deadline, timeoutMs);
             }
             int nextAttempt = attempt > 0 ? attempt + 1 : 2; // skip attempt # in the rate-limited case
             // final case: retry after back-off delay
             long delay = 500L * (1L << Math.min(nextAttempt-2, 4));
-            return Futures.scheduleAsync(
-                    () -> call(method, precondition, request, retry, nextAttempt, backoff, deadline, timeoutMs),
-                    delay, MILLISECONDS, ses);
+            return Futures.scheduleAsync(() -> call(method, precondition, request, executor,
+                    retry, nextAttempt, backoff, deadline, timeoutMs), delay, MILLISECONDS, ses);
         }, MoreExecutors.directExecutor());
     }
 
@@ -574,6 +584,7 @@ public class GrpcClient {
             return timeoutMillis < 0L ? fut.get() : fut.get(timeoutMillis, MILLISECONDS);
         } catch(InterruptedException|CancellationException e) {
             fut.cancel(true);
+            if(e instanceof InterruptedException) Thread.currentThread().interrupt();
             throw Status.CANCELLED.withCause(e).asRuntimeException();
         } catch(ExecutionException ee) {
             throw Status.fromThrowable(ee.getCause()).asRuntimeException();
@@ -582,6 +593,29 @@ public class GrpcClient {
             throw Status.DEADLINE_EXCEEDED.withCause(te)
             .withDescription("local timeout of "+timeoutMillis+"ms exceeded")
             .asRuntimeException();
+        } catch(RuntimeException rte) {
+            fut.cancel(true);
+            throw Status.fromThrowable(rte).asRuntimeException();
+        }
+    }
+    
+    public static <T> T waitFor(Function<Executor,Future<T>> asyncCall) {
+        ThreadlessExecutor exec = new ThreadlessExecutor();
+        Future<T> fut = asyncCall.apply(exec);
+        while (!fut.isDone()) try {
+            exec.waitAndDrain();
+        } catch (InterruptedException ie) {
+            fut.cancel(true);
+            Thread.currentThread().interrupt();
+            throw Status.CANCELLED.withCause(ie).asRuntimeException();
+        }
+        try {
+            return Uninterruptibles.getUninterruptibly(fut);
+        } catch(CancellationException e) {
+            fut.cancel(true);
+            throw Status.CANCELLED.withCause(e).asRuntimeException();
+        } catch(ExecutionException ee) {
+            throw Status.fromThrowable(ee.getCause()).asRuntimeException();
         } catch(RuntimeException rte) {
             fut.cancel(true);
             throw Status.fromThrowable(rte).asRuntimeException();
@@ -633,11 +667,41 @@ public class GrpcClient {
         return serialized(parent, 0);
     }
     
+    private static final Class<? extends Executor> GSE_CLASS
+        = MoreExecutors.newSequentialExecutor(MoreExecutors.directExecutor()).getClass();
+    
     public static Executor serialized(Executor parent, int bufferSize) {
         return parent instanceof SerializingExecutor
                 || parent instanceof io.grpc.internal.SerializingExecutor
-                || parent == MoreExecutors.directExecutor()
                 || parent instanceof OrderedEventExecutor
+                || GSE_CLASS.isAssignableFrom(parent.getClass())
                 ? parent : new SerializingExecutor(parent, bufferSize);
+    }
+    
+    /**
+     * Equivalent to the executor used in grpc ClientCalls class for blocking calls
+     */
+    @SuppressWarnings("serial")
+    private static final class ThreadlessExecutor extends LinkedBlockingQueue<Runnable> implements Executor  {
+        private static final Logger logger = LoggerFactory.getLogger(ThreadlessExecutor.class);
+
+        ThreadlessExecutor() {}
+
+        public void waitAndDrain() throws InterruptedException {
+            Runnable runnable = take();
+            while (runnable != null) {
+                try {
+                    runnable.run();
+                } catch (Throwable t) {
+                    Throwables.throwIfInstanceOf(t, Error.class);
+                    logger.warn("Runnable threw exception", t);
+                }
+                runnable = poll();
+            }
+        }
+        @Override
+        public void execute(Runnable runnable) {
+            add(runnable);
+        }
     }
 }

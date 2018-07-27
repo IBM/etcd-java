@@ -443,10 +443,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     protected KeyValue getRemote(ByteString key, boolean weak) {
         if(key == null) return null;
-        ListenableFuture<RangeResponse> rrf = kvClient.get(key)
-                .serializable(weak).async();
         //TODO -- async option
-        RangeResponse rr = waitFor(rrf, TIMEOUT_MS);
+        RangeResponse rr = kvClient.get(key)
+                .serializable(weak).timeout(TIMEOUT_MS).sync();
         KeyValue kv = rr.getCount() > 0 ? rr.getKvs(0) : null;
         return kv != null ? offerUpdate(kv, false)
                 : offerDelete(key, rr.getHeader().getRevision());
@@ -473,9 +472,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     
     public boolean keyExistsRemote(ByteString key) {
         if(key == null) return false;
-        ListenableFuture<RangeResponse> rrf = kvClient.get(key).countOnly().async();
         //TODO -- async
-        RangeResponse rr = waitFor(rrf, TIMEOUT_MS);
+        RangeResponse rr = kvClient.get(key).countOnly()
+                .timeout(TIMEOUT_MS).sync();
         boolean exists = rr.getCount() > 0;
         if(!exists) offerDelete(key, rr.getHeader().getRevision());
         return exists;
@@ -530,9 +529,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public PutResult put(ByteString key, ByteString value, long lease,
             CompareOrBuilder... conditions) {
 
-        ListenableFuture<TxnResponse> tf = doPut(key, value, true, lease, conditions);
+        TxnRequest treq = putTxn(key, value, true, lease, conditions);
         //TODO -- async option
-        TxnResponse tr = waitFor(tf, TIMEOUT_MS);
+        TxnResponse tr = kvClient.txnSync(treq, TIMEOUT_MS);
         if(tr.getSucceeded()) {
             if(value != null) {
                 KeyValue putValue = tr.getResponses(1).getResponseRange().getKvs(0);
@@ -586,9 +585,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public long putNoGet(ByteString key, ByteString value, long lease,
             CompareOrBuilder... conditions) {
 
-        ListenableFuture<TxnResponse> tf = doPut(key, value, false, lease, conditions);
+        TxnRequest treq = putTxn(key, value, false, lease, conditions);
         //TODO -- async option
-        TxnResponse tr = waitFor(tf, TIMEOUT_MS);
+        TxnResponse tr = kvClient.txnSync(treq, TIMEOUT_MS);
         if(!tr.getSucceeded()) return -1L;
         else if(value != null) {
             KeyValue kv = tr.getResponses(1).getResponseRange().getKvs(0);
@@ -626,7 +625,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 .setResult(CompareResult.EQUAL).setModRevision(modRev);
     }
     
-    protected ListenableFuture<TxnResponse> doPut(ByteString key, ByteString value,
+    protected TxnRequest putTxn(ByteString key, ByteString value,
             boolean getOnFail, long lease, CompareOrBuilder... conditions) {
         TxnRequest.Builder tb = TxnRequest.newBuilder();
         if(conditions != null && conditions.length > 0) {
@@ -640,7 +639,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         if(value != null) tb.addSuccess(putReq(bld, key, value, lease)).addSuccess(getOp);
         else tb.addSuccess(deleteReq(bld, key));
         if(getOnFail) tb.addFailure(getOp);
-        return kvClient.txn(tb.build());
+        return tb.build();
     }
     private static RequestOp getReq(RequestOp.Builder bld, ByteString key) {
         return bld.setRequestRange(RangeRequest.newBuilder().setKey(key)).build();
@@ -661,9 +660,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * @return true if entry was deleted, false if already absent
      */
     public boolean delete(ByteString key) {
-        ListenableFuture<DeleteRangeResponse> df = kvClient.delete(key).async();
         //TODO -- async version
-        DeleteRangeResponse drr = waitFor(df, TIMEOUT_MS);
+        DeleteRangeResponse drr = kvClient.delete(key).timeout(TIMEOUT_MS).sync();
         offerDelete(key, drr.getHeader().getRevision());
         return drr.getDeleted() > 0;
     }
@@ -747,19 +745,18 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         //  1- current count excluding those created since seenUpTo
         //  2- count at revision seenUpTo (this could potentially 
         //     fail with compaction error, see below)
-        ListenableFuture<TxnResponse> txn = kvClient.batch()
-                .get(newModsReq).get(curCountReq).get(seenCountReq).async();
         TxnResponse txnResp;
         try {
-            txnResp = waitFor(txn, 8000L);
+            txnResp = kvClient.batch().get(newModsReq).get(curCountReq)
+                    .get(seenCountReq).timeout(8000L).sync();
         } catch(RuntimeException e) {
             Code code = Status.fromThrowable(e).getCode();
             if(code != Code.OUT_OF_RANGE) throw e;
             // if (2) above fails due to compaction, also retrieve all current keys
             RangeRequest otherKeysReq = rangeReqBld.clearMinModRevision()
                     .setMaxModRevision(seenUpTo).setKeysOnly(true).build();
-            txnResp = waitFor(kvClient.batch().get(newModsReq).get(otherKeysReq)
-                    .async(), 60_000L); // longer timeout
+            txnResp = kvClient.batch().get(newModsReq).get(otherKeysReq)
+                    .timeout(60_000L).sync(); // longer timeout
         }
 
         long revNow = txnResp.getHeader().getRevision();

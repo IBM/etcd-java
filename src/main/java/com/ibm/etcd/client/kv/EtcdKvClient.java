@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client.kv;
 
+import static com.ibm.etcd.client.GrpcClient.waitFor;
 import static com.ibm.etcd.client.KeyUtils.ZERO_BYTE;
 
 import java.util.List;
@@ -109,10 +110,10 @@ public class EtcdKvClient implements KvClient {
         return txnIf().then();
     }
 
-//    @Override
-//    public TxnResponse txnSync(TxnRequest txn) {
-//        return blockingStub.txn(txn); //TODO exceptions??
-//    }
+    @Override
+    public TxnResponse txnSync(TxnRequest txn, long timeoutMillis) {
+        return waitFor(ex -> client.call(METHOD_TXN, txn, false, timeoutMillis, ex));
+    }
     
     @Override
     public ListenableFuture<PutResponse> put(PutRequest request) {
@@ -201,14 +202,18 @@ public class EtcdKvClient implements KvClient {
             return (ReqT)builder.build();
         }
         @Override
-        final public ListenableFuture<RespT> async() {
+        public ListenableFuture<RespT> async(Executor executor) {
             return client.call(getMethod(), precondition, (ReqT)builder.build(),
-                    GrpcClient.retryDecision(idempotent()),
+                    executor, GrpcClient.retryDecision(idempotent()), 
                     retryStrategy == RetryStrategy.BACKOFF, deadline, timeoutMs);
         }
         @Override
+        final public ListenableFuture<RespT> async() {
+            return async(null);
+        }
+        @Override
         final public RespT sync() {
-            return GrpcClient.waitFor(async());
+            return GrpcClient.waitFor(this::async);
         }
     }
     
@@ -537,6 +542,10 @@ public class EtcdKvClient implements KvClient {
             @Override
             public ListenableFuture<TxnResponse> async() {
                 return EtcdTxnRequest.this.async();
+            }
+            @Override
+            public ListenableFuture<TxnResponse> async(Executor executor) {
+                return EtcdTxnRequest.this.async(executor);
             }
             @Override
             public TxnRequest asRequest() {

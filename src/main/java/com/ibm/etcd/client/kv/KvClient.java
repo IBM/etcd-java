@@ -56,6 +56,7 @@ public interface KvClient {
     
     interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,RespT> {
         ListenableFuture<RespT> async();
+        ListenableFuture<RespT> async(Executor executor);
         RespT sync();
         /**
          * timeout is <b>per attempt</b>
@@ -177,6 +178,14 @@ public interface KvClient {
      * @return future for {@link TxnResponse}
      */
     ListenableFuture<TxnResponse> txn(TxnRequest txn);
+    
+    /**
+     * 
+     * @param txn
+     * @param timeoutMillis
+     * @return {@link TxnResponse}
+     */
+    TxnResponse txnSync(TxnRequest txn, long timeoutMillis);
     
     /**
      * Start a fluent transaction request
