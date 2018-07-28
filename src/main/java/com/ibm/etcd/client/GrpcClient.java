@@ -29,7 +29,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -143,10 +142,10 @@ public class GrpcClient {
         Status status = Status.fromThrowable(t);
         Code code = status != null ? status.getCode() : null;
         return code == Code.UNAVAILABLE
+                || code == Code.DEADLINE_EXCEEDED
                 || (code == Code.UNKNOWN
                 && status.getDescription() != null
                 && status.getDescription().startsWith("Channel closed"));
-        //TODO and maybe some DEADLINE_EXCEEDED cases (but not for overall deadline)
     };
     
     static final RetryDecision<?> NON_IDEMP = (t,r)
@@ -196,7 +195,8 @@ public class GrpcClient {
         return Futures.catchingAsync(fuCall(method, request, callOpts, timeoutMs), Exception.class, t -> {
             boolean reauth;
             // first case: if no retries to do then fail
-            if((!backoff && attempt > 0) || (!(reauth = reauthIfRequired(t, baseCallOpts))
+            if((!backoff && attempt > 0) || (deadline != null && deadline.isExpired())
+                    || (!(reauth = reauthIfRequired(t, baseCallOpts))
                             && !retry.retry(t, request))) return Futures.immediateFailedFuture(t);
             // second case: immediate retry (first failure or after auth failure + reauth)
             if(reauth || attempt == 0 && immediateRetryLimiter.tryAcquire()) {
@@ -205,9 +205,12 @@ public class GrpcClient {
             }
             int nextAttempt = attempt > 0 ? attempt + 1 : 2; // skip attempt # in the rate-limited case
             // final case: retry after back-off delay
-            long delay = 500L * (1L << Math.min(nextAttempt-2, 4));
+            long delayMs = 500L * (1L << Math.min(nextAttempt-2, 4));
+            if(deadline != null && deadline.timeRemaining(MILLISECONDS) < delayMs) {
+                return Futures.immediateFailedFuture(t);
+            }
             return Futures.scheduleAsync(() -> call(method, precondition, request, executor,
-                    retry, nextAttempt, backoff, deadline, timeoutMs), delay, MILLISECONDS, ses);
+                    retry, nextAttempt, backoff, deadline, timeoutMs), delayMs, MILLISECONDS, ses);
         }, MoreExecutors.directExecutor());
     }
 
@@ -220,6 +223,9 @@ public class GrpcClient {
             Deadline timeoutDeadline = Deadline.after(timeoutMs, MILLISECONDS);
             if(deadline == null || timeoutDeadline.isBefore(deadline)) {
                 callOptions = callOptions.withDeadline(timeoutDeadline);
+            } else if(deadline.isExpired()) {
+                return Futures.immediateFailedFuture(
+                        Status.DEADLINE_EXCEEDED.asRuntimeException());
             }
         }
         final CallOptions callOpts = callOptions;
@@ -534,7 +540,7 @@ public class GrpcClient {
                                 ? ThreadLocalRandom.current().nextLong(500L)
                                         : 2000L * (1 << Math.min(errCount-3, 2)));
                         ses.schedule(ResilientBiDiStream.this::refreshBackingStream,
-                                delay, TimeUnit.MILLISECONDS);
+                                delay, MILLISECONDS);
                     }
                 } else {
                     sentCallOptions = null;
