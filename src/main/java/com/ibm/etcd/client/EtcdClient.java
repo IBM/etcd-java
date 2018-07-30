@@ -29,6 +29,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import javax.net.ssl.SSLException;
@@ -36,7 +37,6 @@ import javax.net.ssl.TrustManagerFactory;
 
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
-import com.google.common.collect.Iterables;
 import com.google.common.io.ByteSource;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -195,7 +195,7 @@ public class EtcdClient implements KvStoreClient {
     }
     
     private static int defaultThreadCount() {
-        return Math.min(8, Runtime.getRuntime().availableProcessors());
+        return Math.min(6, Runtime.getRuntime().availableProcessors());
     }
     
     public static Builder forEndpoint(String host, int port) {
@@ -249,8 +249,6 @@ public class EtcdClient implements KvStoreClient {
         }
         
         chanBuilder.eventLoopGroup(internalExecutor).channelType(channelType);
-        this.eventLoops = Iterables.transform(internalExecutor,
-                el -> (SingleThreadEventLoop) el);
         
         //TODO default chan executor TBD
         if(userExecutor == null) userExecutor = ForkJoinPool.commonPool();
@@ -291,9 +289,6 @@ public class EtcdClient implements KvStoreClient {
         });
     }
     
-    // used only in clean shutdown logic
-    final Iterable<SingleThreadEventLoop> eventLoops;
-    
     /**
      * Execute the provided task in the EventLoopGroup only once there
      * are no more running/queued tasks (but might be future scheduled tasks).
@@ -301,18 +296,33 @@ public class EtcdClient implements KvStoreClient {
      * are scheduled by the already running/queued ones.
      */
     private void executeWhenIdle(Runnable task) {
+        AtomicInteger remainingTasks = new AtomicInteger(-1);
+        // Two "cycles" are performed, the first with remainingTasks == -1.
+        // If remainingTasks > 0 after the second cycle, this method
+        // is re-called recursively (in an async context)
         CyclicBarrier cb = new CyclicBarrier(internalExecutor.executorCount(), () -> {
-            if(Iterables.all(eventLoops, ex -> ex.pendingTasks() == 0)) task.run();
-            else executeWhenIdle(task);
+            int rt = remainingTasks.get();
+            if(rt == -1) remainingTasks.incrementAndGet();
+            else if(rt > 0) executeWhenIdle(task);
+            else internalExecutor.execute(task);
         });
-        Runnable await = () -> {
-            try {
-                cb.await();
-            } catch (InterruptedException|BrokenBarrierException e) {
-                Thread.currentThread().interrupt();
+        internalExecutor.forEach(ex -> ex.execute(new Runnable() {
+            @Override public void run() {
+                SingleThreadEventLoop stel = (SingleThreadEventLoop)ex;
+                try {
+                    if(stel.pendingTasks() > 0) ex.execute(this);
+                    else {
+                        cb.await();
+                        if(stel.pendingTasks() > 0) {
+                            remainingTasks.incrementAndGet();
+                        }
+                        cb.await();
+                    }
+                } catch (InterruptedException|BrokenBarrierException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
-        };
-        eventLoops.forEach(ex -> ex.executeAfterEventLoopIteration(await));
+        }));
     }
     
     public boolean isClosed() {
