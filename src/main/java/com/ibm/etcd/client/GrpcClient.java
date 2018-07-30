@@ -380,10 +380,19 @@ public class GrpcClient {
                     }
                 }
                 
-                if(requestExecutor == null) rs.onNext(value); // (***)
+                if(requestExecutor == null) sendOnNext(rs, value); // (***)
                 else {
                     final StreamObserver<ReqT> rsFinal = rs;
-                    requestExecutor.execute(() -> rsFinal.onNext(value));
+                    requestExecutor.execute(() -> sendOnNext(rsFinal, value));
+                }
+            }
+            
+            private void sendOnNext(StreamObserver<ReqT> reqStream, ReqT value) {
+                try {
+                    reqStream.onNext(value);
+                } catch(IllegalStateException ise) {
+                    // this is possible and ok if the stream was already closed
+                    if(grpcReqStream != emptyStream()) throw ise;
                 }
             }
             
