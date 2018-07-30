@@ -306,25 +306,23 @@ public class EtcdClient implements KvStoreClient {
             else if(rt > 0) executeWhenIdle(task);
             else internalExecutor.execute(task);
         });
-        internalExecutor.forEach(ex -> {
-            ex.execute(new Runnable() {
-                @Override public void run() {
-                    SingleThreadEventLoop stel = (SingleThreadEventLoop)ex;
-                    try {
-                        if(stel.pendingTasks() > 0) ex.execute(this);
-                        else {
-                            cb.await();
-                            if(stel.pendingTasks() > 0) {
-                                remainingTasks.incrementAndGet();
-                            }
-                            cb.await();
+        internalExecutor.forEach(ex -> ex.execute(new Runnable() {
+            @Override public void run() {
+                SingleThreadEventLoop stel = (SingleThreadEventLoop)ex;
+                try {
+                    if(stel.pendingTasks() > 0) ex.execute(this);
+                    else {
+                        cb.await();
+                        if(stel.pendingTasks() > 0) {
+                            remainingTasks.incrementAndGet();
                         }
-                    } catch (InterruptedException|BrokenBarrierException e) {
-                        Thread.currentThread().interrupt();
+                        cb.await();
                     }
+                } catch (InterruptedException|BrokenBarrierException e) {
+                    Thread.currentThread().interrupt();
                 }
-            });
-        });
+            }
+        }));
     }
     
     public boolean isClosed() {
