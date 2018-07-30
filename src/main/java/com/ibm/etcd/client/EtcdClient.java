@@ -285,8 +285,8 @@ public class EtcdClient implements KvStoreClient {
             try {
                 channel.shutdown().awaitTermination(2, SECONDS);
             } catch (InterruptedException e) {}
-            executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS), false);
-        }, true);
+            executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS));
+        });
     }
     
     /**
@@ -295,7 +295,7 @@ public class EtcdClient implements KvStoreClient {
      * The key thing here is that it will continue to wait if new tasks
      * are scheduled by the already running/queued ones.
      */
-    private void executeWhenIdle(Runnable task, boolean yield) {
+    private void executeWhenIdle(Runnable task) {
         AtomicInteger remainingTasks = new AtomicInteger(-1);
         // Two "cycles" are performed, the first with remainingTasks == -1.
         // If remainingTasks > 0 after the second cycle, this method
@@ -303,9 +303,8 @@ public class EtcdClient implements KvStoreClient {
         CyclicBarrier cb = new CyclicBarrier(internalExecutor.executorCount(), () -> {
             int rt = remainingTasks.get();
             if(rt == -1) remainingTasks.incrementAndGet();
-            else if(rt > 0) executeWhenIdle(task, yield);
-            else if(yield) internalExecutor.execute(task);
-            else task.run();
+            else if(rt > 0) executeWhenIdle(task);
+            else internalExecutor.execute(task);
         });
         internalExecutor.forEach(ex -> {
             ex.execute(new Runnable() {
