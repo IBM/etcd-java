@@ -17,14 +17,19 @@ package com.ibm.etcd.client;
 
 import static org.junit.Assert.*;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+import com.google.common.collect.Sets;
+import com.ibm.etcd.api.LeaseStatus;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
 import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
@@ -175,6 +180,35 @@ public class LeaseTest {
 
         } finally {
             proxy.kill();
+        }
+    }
+    
+    @Test
+    public void testPersistentLeaseClientShutdown() throws Exception {
+        try(EtcdClient client1 = EtcdClient.forEndpoint("localhost",2379)
+                .withPlainText().build();
+                EtcdClient client2 = EtcdClient.forEndpoint("localhost",2379)
+                        .withPlainText().build()) {
+            Set<PersistentLease> pls = new HashSet<>();
+            for(int i=0;i<500;i++) pls.add(client1.getLeaseClient()
+                    .maintain().keepAliveFreq(4).minTtl(40).start());
+            Set<Long> lids = new HashSet<>();
+            for(PersistentLease pl : pls) {
+                Long lid = pl.get();
+                assertTrue(lid > 0);
+                lids.add(lid);
+            }
+            
+            Set<Long> lidsFound = client2.getLeaseClient().list().get()
+                    .getLeasesList().stream().map(LeaseStatus::getID).collect(Collectors.toSet());
+            assertTrue(lidsFound.containsAll(lids));
+
+            client1.close();
+            client1.getInternalExecutor().awaitTermination(3, TimeUnit.SECONDS);
+            
+            lidsFound = client2.getLeaseClient().list().get()
+                    .getLeasesList().stream().map(LeaseStatus::getID).collect(Collectors.toSet());
+            assertTrue(Sets.intersection(lids, lidsFound).isEmpty());
         }
     }
     

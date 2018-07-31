@@ -22,11 +22,13 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.io.Closeable;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -285,11 +287,11 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     
     class LeaseRecord extends AbstractFuture<Long> implements PersistentLease {
         final CopyOnWriteArrayList<StreamObserver<LeaseState>> observers;
-        final Executor eventLoop;
+        final Executor eventLoop, observerExecutor;
+        final int intervalSecs, minExpirySecs;
         
         ListenableFuture<LeaseGrantResponse> createFuture;
         
-        final int intervalSecs, minExpirySecs;
         long leaseId; // zero or final
         long keepAliveTtlSecs = -1L;
         long expiryTimeMs = -1L;
@@ -304,15 +306,17 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
             this.leaseId = leaseId;
             this.observers = observer == null ? new CopyOnWriteArrayList<>()
                     : new CopyOnWriteArrayList<>(Collections.singletonList(observer));
-            this.eventLoop = GrpcClient.serialized(executor != null ? executor
+            this.eventLoop = GrpcClient.serialized(ses);
+            this.observerExecutor = GrpcClient.serialized(executor != null ? executor
                     : client.getResponseExecutor());
         }
         
         @Override
         public void addStateObserver(StreamObserver<LeaseState> observer, boolean publishInit) {
             if(publishInit) eventLoop.execute(() -> {
+                LeaseState stateNow = state;
                 observers.add(observer);
-                callObserverOnNext(observer, state);
+                observerExecutor.execute(() -> callObserverOnNext(observer, stateNow));
             });
             else observers.add(observer);
         }
@@ -439,12 +443,16 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
             if(stateBefore == CLOSED) return; //tbc
             
             state = targetState; // change state before completing future
-            if(stateBefore == PENDING && targetState == ACTIVE) {
-                set(leaseId);
-            }
-            if(!observers.isEmpty()) for(StreamObserver<LeaseState> observer : observers) {
-                callObserverOnNext(observer, state);
-            }
+            long leaseToSet = stateBefore == PENDING && targetState == ACTIVE ? leaseId : -1L;
+
+            Iterator<StreamObserver<LeaseState>> snapshot = !observers.isEmpty()
+                    ? observers.iterator() : Collections.emptyIterator();
+            
+            // use observerExecutor to complete future and/or call observers
+            if(snapshot.hasNext() || leaseToSet != -1L) observerExecutor.execute(() -> {
+                if(leaseToSet != -1L) set(leaseToSet);
+                while(snapshot.hasNext()) callObserverOnNext(snapshot.next(), targetState);
+            });
         }
         
         // called from start method and event loop
@@ -522,22 +530,31 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                 }
                 //TODO(maybe) cancel in case of create retry waiting
                 leaseClosed(this);
-                setException(new IllegalStateException("closed"));
+                if(!isDone()) observerExecutor.execute(()
+                        -> setException(new IllegalStateException("closed")));
             });
         }
         
         // called from event loop
         private void revoke() {
             if(leaseId == 0L || getCurrentTtlSecs() <= 0) return;
-            ListenableFuture<LeaseRevokeResponse> fut = EtcdLeaseClient.this.revoke(leaseId);
+            ListenableFuture<LeaseRevokeResponse> fut = sendRevokeDirect(leaseId);
             Futures.addCallback(fut, (FutureListener<LeaseRevokeResponse>) (v,t) -> {
-                if(t == null || GrpcClient.codeFromThrowable(t) == Code.NOT_FOUND) {
-                    expiryTimeMs = 0L;
-                    keepAliveTtlSecs = 0L;
-                } else {
-                    if(leaseId == 0 || getCurrentTtlSecs() <= 0) return;
-                    //TODO convert to use common GrpcClient retry logic probably
-                    ses.schedule(LeaseRecord.this::revoke, 2, SECONDS);
+                try {
+                    eventLoop.execute(() -> {
+                        if(t == null || GrpcClient.codeFromThrowable(t) == Code.NOT_FOUND) {
+                            expiryTimeMs = 0L;
+                            keepAliveTtlSecs = 0L;
+                        } else {
+                            // no point in scheduling future retry if client is already closed
+                            if(leaseId == 0 || getCurrentTtlSecs() <= 0 || closed) return;
+                            //TODO convert to use common GrpcClient retry logic probably
+                            ses.schedule(LeaseRecord.this::revoke, 2, SECONDS);
+                        }
+                    });
+                } catch(RejectedExecutionException ree) {
+                    // ok if the client/eventloop is closed before we receive the response
+                    if(!closed) throw ree;
                 }
             }, directExecutor());
         }
@@ -571,6 +588,12 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         public long getKeepAliveTtlSecs() {
             return keepAliveTtlSecs;
         }
+    }
+    
+    ListenableFuture<LeaseRevokeResponse> sendRevokeDirect(long leaseId) {
+        return client.call(METHOD_LEASE_REVOKE,
+                LeaseRevokeRequest.newBuilder().setID(leaseId).build(),
+                false, 0L, directExecutor());
     }
     
     class ProtectedLeaseRecord extends LeaseRecord {
