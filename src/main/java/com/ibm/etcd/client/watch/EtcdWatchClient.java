@@ -25,7 +25,6 @@ import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -92,7 +91,7 @@ public class EtcdWatchClient implements Closeable {
     
     public EtcdWatchClient(GrpcClient client, Executor executor) {
         this.client = client;
-        this.observerExecutor = executor != null ? executor : ForkJoinPool.commonPool();
+        this.observerExecutor = executor != null ? executor : client.getResponseExecutor();
         this.eventLoop = GrpcClient.serialized(client.getInternalExecutor());
     }
     

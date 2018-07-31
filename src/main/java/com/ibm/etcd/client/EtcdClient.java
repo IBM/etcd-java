@@ -26,7 +26,7 @@ import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,6 +35,7 @@ import java.util.function.Supplier;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.io.ByteSource;
@@ -250,8 +251,12 @@ public class EtcdClient implements KvStoreClient {
         
         chanBuilder.eventLoopGroup(internalExecutor).channelType(channelType);
         
-        //TODO default chan executor TBD
-        if(userExecutor == null) userExecutor = ForkJoinPool.commonPool();
+        if(userExecutor == null) {
+            //TODO default chan executor TBD
+            userExecutor = Executors.newCachedThreadPool(
+                    new ThreadFactoryBuilder().setDaemon(true)
+                    .setNameFormat("etcd-callback-thread-%d").build());
+        }
         chanBuilder.executor(userExecutor);
         
         this.channel = chanBuilder.build();
@@ -446,6 +451,13 @@ public class EtcdClient implements KvStoreClient {
         public EtcdEventThread(Runnable r) {
             super(r);
         }
+    }
+    
+    // -----
+    
+    @VisibleForTesting
+    MultithreadEventLoopGroup getInternalExecutor() {
+        return internalExecutor;
     }
     
 }
