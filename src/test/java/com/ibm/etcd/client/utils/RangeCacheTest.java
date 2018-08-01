@@ -42,6 +42,8 @@ import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.kv.KvClient.FluentTxnOps;
 import com.ibm.etcd.client.utils.RangeCache.PutResult;
 
+import io.grpc.Deadline;
+
 public class RangeCacheTest {
     
     static LocalNettyProxy proxy;
@@ -174,8 +176,10 @@ public class RangeCacheTest {
                             for(int i=1;i<=N;i++) {
                                 prox.start();
                                 Thread.sleep(1000L+(long)(Math.random()*5000));
-                                System.out.println("killing proxy "+i);
-                                if(i < N) prox.kill(); // finish in running state
+                                if(i < N) {
+                                    System.out.println("killing proxy "+i);
+                                    prox.kill(); // finish in running state
+                                }
                                 Thread.sleep((long)(Math.random()*4000));
                             }
                         } catch(Exception e) {
@@ -234,7 +238,9 @@ public class RangeCacheTest {
                 assertEquals(ls, rs);
 
                 // wait until connected and to catch up
-                rcClient.getKvClient().get(bs("tmp/")).backoffRetry().sync();
+                rcClient.getKvClient().get(bs("tmp/"))
+                .deadline(Deadline.after(20, TimeUnit.SECONDS))
+                .backoffRetry().sync();
                 Thread.sleep(6_000L);
                 
                 System.out.println("rc size is "+rc.size());
