@@ -28,6 +28,9 @@ import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
 import com.ibm.etcd.client.KvStoreClient;
 import com.ibm.etcd.client.kv.KvClient;
+
+import io.grpc.Deadline;
+
 import com.ibm.etcd.api.PutRequest;
 import com.ibm.etcd.api.RangeResponse;
 import com.ibm.etcd.api.TxnResponse;
@@ -95,6 +98,7 @@ public class KvTest {
             
             ListenableFuture<RangeResponse> rrFut1 = kvc.get(bs("new")).async(); // should fail
             ListenableFuture<RangeResponse> rrFut2 = kvc.get(bs("new"))
+                    .deadline(Deadline.after(20, TimeUnit.SECONDS))
                     .backoffRetry().async(); // should work
             
             try {

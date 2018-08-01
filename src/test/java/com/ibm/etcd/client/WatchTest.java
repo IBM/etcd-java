@@ -221,8 +221,10 @@ public class WatchTest {
                             for(int i=1;i<=N;i++) {
                                 prox.start();
                                 Thread.sleep(1000L+(long)(Math.random()*5000));
-                                System.out.println("killing proxy "+i);
-                                if(i < N) prox.kill(); // finish in running state
+                                if(i < N) {
+                                    System.out.println("killing proxy "+i);
+                                    prox.kill(); // finish in running state
+                                }
                                 Thread.sleep((long)(Math.random()*4000));
                             }
                         } catch(Exception e) {
