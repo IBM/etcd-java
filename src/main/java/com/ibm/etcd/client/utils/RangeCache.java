@@ -327,8 +327,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         else for(Listener l : listeners) try {
             l.event(type, keyValue);
         } catch(RuntimeException re) {
-            logger.warn("Listener threw exception for "+type
-                    +" event for key "+keyValue.getKey().toStringUtf8(), re);
+            logger.warn("Listener threw exception for "+type+" event"
+                    + (keyValue!= null?" for key "
+                            + keyValue.getKey().toStringUtf8():""), re);
         }
     }
     
@@ -370,17 +371,17 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         // a possible (but unlikely) race with deletions
         if(watchThread && !isDeleted) {
             // optimized non-deletion path
-            KeyValue newKv = entries.merge(key, keyValue, (k,v) ->
-                (modRevision > v.getModRevision() ? keyValue : v));
+            KeyValue newKv = entries.merge(key, keyValue, (existKv,kv) ->
+                (kv.getModRevision() > existKv.getModRevision() ? kv : existKv));
             if(newKv == keyValue) notifyListeners(EventType.UPDATED, keyValue, true);
-          return kvOrNullIfDeleted(newKv);
+            return kvOrNullIfDeleted(newKv);
         }
         KeyValue existKv = entries.get(key);
         while(true) {
             if(existKv != null) {
                 long existModRevision = existKv.getModRevision();
                 if(existModRevision >= modRevision) return kvOrNullIfDeleted(existKv);
-                KeyValue newKv = entries.computeIfPresent(key, (k,v) -> 
+                KeyValue newKv = entries.computeIfPresent(key, (k,v) ->
                     (existModRevision == v.getModRevision() ? keyValue : v));
                 if(newKv != keyValue) {
                     existKv = newKv;
