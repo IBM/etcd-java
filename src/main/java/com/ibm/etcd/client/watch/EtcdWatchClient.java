@@ -399,7 +399,7 @@ public class EtcdWatchClient implements Closeable {
             synchronized(EtcdWatchClient.this) {
                 requestStream = newRequestStream;
                 if(!activeWatchers.isEmpty() || !pendingCreate.isEmpty()) {
-                    pending = new ArrayList<WatcherRecord>(pendingCreate);
+                    pending = new ArrayList<>(pendingCreate);
                     pending.addAll(activeWatchers.values());
                     pendingCreate.clear();
                     activeWatchers.clear();

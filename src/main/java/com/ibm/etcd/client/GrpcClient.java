@@ -152,7 +152,7 @@ public class GrpcClient {
             -> codeFromThrowable(t) == Code.UNAVAILABLE && isConnectException(t);
             
     @SuppressWarnings("unchecked")
-    public static final <R> RetryDecision<R> retryDecision(boolean idempotent) {
+    public static <R> RetryDecision<R> retryDecision(boolean idempotent) {
         return (RetryDecision<R>) (idempotent ? IDEMP : NON_IDEMP);
     }
     

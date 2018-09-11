@@ -106,9 +106,9 @@ public class EtcdClient implements KvStoreClient {
     private volatile PersistentLease sessionLease; // lazy-instantiated
     
     public static class Builder {
+        final private NettyChannelBuilder chanBuilder;
         private ByteString name, password;
         private long defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
-        private NettyChannelBuilder chanBuilder;
         private boolean preemptAuth;
         private int threads = defaultThreadCount();
         private Executor executor; // for call-backs
@@ -429,7 +429,7 @@ public class EtcdClient implements KvStoreClient {
                         .permanent().start();
             }
         }
-        if(sl == CLOSED) throw new IllegalStateException("client closed");
+        if(leaseClient == CLOSED) throw new IllegalStateException("client closed");
         return sl;
     }
     

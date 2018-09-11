@@ -128,7 +128,7 @@ public class EtcdLeaderElection implements AutoCloseable {
         }
     }
 
-    public void start() throws Exception {
+    public void start() {
         synchronized(candidates) {
             candidates.start();
             if(ourCandidate != null) ourCandidate.start();

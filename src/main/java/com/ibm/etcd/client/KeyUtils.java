@@ -15,12 +15,12 @@
  */
 package com.ibm.etcd.client;
 
-/**
- * Helper methods for manipulating ByteString keys
- */
 import com.google.protobuf.ByteString;
 import com.google.protobuf.UnsafeByteOperations;
 
+/**
+ * Helper methods for manipulating ByteString keys
+ */
 public class KeyUtils {
 
     private KeyUtils() {} // static only
@@ -28,12 +28,12 @@ public class KeyUtils {
     public static final ByteString ZERO_BYTE = singleByte(0);
     
     public static ByteString plusOne(ByteString key) {
-        int max = key.size()-1;
+        int max = key.size() - 1;
         if(max < 0) return singleByte(1);
-        int last = key.byteAt(max);
+        int lastPlusOne = key.byteAt(max) + 1;
         ByteString excludeLast = key.substring(0, max);
-        return last == 0xff ? plusOne(excludeLast)
-                : excludeLast.concat(singleByte(last+1));
+        return lastPlusOne == 0 ? plusOne(excludeLast)
+                : excludeLast.concat(singleByte(lastPlusOne));
     }
     
     public static ByteString singleByte(int b) {

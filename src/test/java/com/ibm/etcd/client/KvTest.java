@@ -31,6 +31,7 @@ import com.ibm.etcd.client.kv.KvClient;
 
 import io.grpc.Deadline;
 
+import com.ibm.etcd.api.KeyValue;
 import com.ibm.etcd.api.PutRequest;
 import com.ibm.etcd.api.RangeResponse;
 import com.ibm.etcd.api.TxnResponse;
@@ -55,17 +56,22 @@ public class KvTest {
         
         try (KvStoreClient directClient = EtcdClient.forEndpoint("localhost", 2379)
                 .withPlainText().build();
-        KvStoreClient client = EtcdClient.forEndpoint("localhost", 2391)
+            KvStoreClient client = EtcdClient.forEndpoint("localhost", 2391)
                 .withPlainText().build()) {
             
             KvClient kvc = client.getKvClient();
             
-            assertEquals(0L, kvc.delete(bs("notthere")).sync().getDeleted());
-            
             ByteString a = bs("a"), b = bs("b"), v1 = bs("v1"), v2 = bs("v2");
 
+            // clean up first
+            kvc.batch().delete(kvc.delete(a).asRequest())
+                    .delete(kvc.delete(b).asRequest()).sync();
+
             // basic put
-            assertTrue(kvc.put(a, v1).sync().getHeader().getRevision() > 0);
+            assertEquals(KeyValue.getDefaultInstance(),
+                    kvc.put(a, v2).prevKv().sync().getPrevKv());
+            assertTrue(kvc.put(a, v2).sync().getHeader().getRevision() > 0);
+            assertEquals(v2, kvc.put(a, v1).prevKv().sync().getPrevKv().getValue());
             
             // basic get
             RangeResponse rr = kvc.get(bs("a")).sync();
@@ -73,6 +79,7 @@ public class KvTest {
             assertEquals(v1, rr.getKvs(0).getValue());
             
             // basic delete
+            assertEquals(0L, kvc.delete(bs("notthere")).sync().getDeleted());
             assertEquals(v1, kvc.delete(a).prevKv().sync().getPrevKvs(0).getValue());
             assertEquals(0, kvc.get(bs("a")).sync().getCount());
            
@@ -107,20 +114,20 @@ public class KvTest {
             } catch(Exception e) {
                 System.out.println("failed with: "+e); //TODO
             }
-            
+
             // this one should still be retrying
             assertFalse(rrFut2.isDone());
-            
+
             // reconnect
             proxy.start();
-            
+
             // should succeed once network path is there again
             long before = System.nanoTime();
             RangeResponse rr2 = rrFut2.get(2000, TimeUnit.SECONDS);
             long took = (System.nanoTime() - before)/1000_000L;
             assertEquals(bs("newval"), rr2.getKvs(0).getValue());
             System.out.println("took "+took+"ms after network was reestablished");
-            
+
         } finally {
             proxy.close();
         }

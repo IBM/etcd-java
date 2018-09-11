@@ -202,7 +202,7 @@ public class EtcdClusterConfig {
         throw new FileNotFoundException("etcd config json file not found: "+f);
     }
     
-    private static Cache<CacheKey,EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
+    private static final Cache<CacheKey,EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
             .<CacheKey,EtcdClient>removalListener(rn -> rn.getValue().close()).build();
     
     public static EtcdClient getClient(EtcdClusterConfig config) throws IOException, CertificateException {
