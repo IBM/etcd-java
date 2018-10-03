@@ -53,29 +53,30 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
         }
     }
     
-    private final SubResolver[] resolvers;
-    
+    private final URI[] uris;
+
     public StaticEtcdNameResolverFactory(List<String> endpoints) {
         if(endpoints == null || endpoints.isEmpty()) throw new IllegalArgumentException("endpoints");
         int count = endpoints.size();
-        resolvers = new SubResolver[count];
+        uris = new URI[count];
         for(int i=0;i< count;i++) {
             String endpoint = endpoints.get(i).trim();
             Matcher m = ADDR_PATT.matcher(endpoint);
             if(!m.matches()) throw new IllegalArgumentException("invalid endpoint: "+endpoint);
             String portStr = m.group(2);
             if(portStr == null) portStr = String.valueOf(EtcdClient.DEFAULT_PORT);
-            resolvers[i] = new SubResolver(URI.create("dns:///"+m.group(1)+":"+portStr));
+            uris[i] = URI.create("dns:///"+m.group(1)+":"+portStr);
         }
-        if(count > 1) Collections.shuffle(Arrays.asList(resolvers));
+        if(count > 1) Collections.shuffle(Arrays.asList(uris));
     }
     
     @Override
     public NameResolver newNameResolver(URI targetUri, Attributes params) {
         if(!ETCD.equals(targetUri.getScheme())) return null;
-        if(resolvers.length == 1) {
-            return resolvers[0].resolver;
+        if(uris.length == 1) {
+            return new SubResolver(uris[0]).resolver;
         }
+        SubResolver[] resolvers = createSubResolvers();
         return new NameResolver() {
             int currentCount = 0;
             @Override
@@ -100,6 +101,12 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
                 });
             }
             @Override
+            public void refresh() {
+                synchronized(resolvers) {
+                    for(SubResolver sr : resolvers) sr.resolver.refresh();
+                }
+            }
+            @Override
             public String getServiceAuthority() {
                 return ETCD;
             }
@@ -111,6 +118,16 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
             }
         };
     }
+
+    private SubResolver[] createSubResolvers() {
+        int count = uris.length;
+        SubResolver[] resolvers = new SubResolver[count];
+        for(int i=0;i< count;i++) {
+            resolvers[i] = new SubResolver(uris[i]);
+        }
+        return resolvers;
+    }
+
     @Override
     public String getDefaultScheme() {
         return ETCD;
