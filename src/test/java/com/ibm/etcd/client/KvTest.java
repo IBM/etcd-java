@@ -17,7 +17,9 @@ package com.ibm.etcd.client;
 
 import static org.junit.Assert.*;
 
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -30,6 +32,8 @@ import com.ibm.etcd.client.KvStoreClient;
 import com.ibm.etcd.client.kv.KvClient;
 
 import io.grpc.Deadline;
+import io.grpc.Status;
+import io.grpc.Status.Code;
 
 import com.ibm.etcd.api.KeyValue;
 import com.ibm.etcd.api.PutRequest;
@@ -130,6 +134,46 @@ public class KvTest {
 
         } finally {
             proxy.close();
+        }
+    }
+    
+    @Test(timeout=15000)
+    public void testSyncDeadlock() throws Exception {
+        
+        // see https://github.com/IBM/etcd-java/issues/16
+        
+        final long DEFAULT_TIMEOUT_MS = 1L;
+        final long DEADLINE_TIMEOUT_MS = 1L;
+
+        try(KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379)
+                    .withPlainText().build()) {
+            
+            client.getKvClient().delete(bs("deadlock-test/")).asPrefix().sync();
+            try {
+                IntStream.range(0, 6000).forEach(i -> {
+                    try {
+                        client.getKvClient()
+                        .put(bs("deadlock-test/"+UUID.randomUUID().toString()), bs("some-value"))
+                        .timeout(DEFAULT_TIMEOUT_MS)
+                        .backoffRetry()
+                        .deadline(Deadline.after(DEADLINE_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                        .sync();
+                    } catch (Exception e) {
+                        Status status = Status.fromThrowable(e);
+                        if(Code.DEADLINE_EXCEEDED != status.getCode()) {
+                            System.out.println("attempt "+i+" returned "+status);
+                            // etcdserver seems to return UNAVAILABLE instead of
+                            // DEADLINE_EXEEDED for deadline breach
+                            assertEquals("attept "+i, Code.UNAVAILABLE, status.getCode());
+                            assertTrue(status.getDescription().endsWith("request timed out"));
+                        }
+                    }
+                });
+            } finally {
+                // clean up
+                Thread.interrupted();
+                client.getKvClient().delete(bs("deadlock-test/")).asPrefix().sync();
+            }
         }
     }
     
