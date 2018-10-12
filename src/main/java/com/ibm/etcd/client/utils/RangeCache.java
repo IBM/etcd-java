@@ -36,6 +36,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -687,9 +688,18 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * 
      * @return an {@link Iterator} over the {@link KeyValue}s of this cache
      */
+    @Override
     public Iterator<KeyValue> iterator() {
         // filtering iterator is unmodifiable
         return Iterators.filter(entries.values().iterator(), kv -> !isDeleted(kv));
+    }
+    
+    @Override
+    public void forEach(Consumer<? super KeyValue> action) {
+        // avoid some allocations
+        entries.values().forEach(kv -> {
+            if(!isDeleted(kv)) action.accept(kv);
+        });
     }
     
     
