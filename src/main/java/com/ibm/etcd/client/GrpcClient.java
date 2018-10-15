@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import java.lang.reflect.Proxy;
@@ -45,6 +46,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.RateLimiter;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.Uninterruptibles;
 
 import io.grpc.CallCredentials;
@@ -179,13 +181,13 @@ public class GrpcClient {
         return call(method, precondition, request, executor, retry, 0, backoff, null, timeoutMs);
     }
     
-    // deadline is for entire request  (including retry pauses),
+    // deadline is for entire request (including retry pauses),
     // timeout is per-attempt and 0 means not specified
     private <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             Condition precondition, ReqT request, Executor executor, RetryDecision<ReqT> retry,
             int attempt, boolean backoff, Deadline deadline, long timeoutMs) {
         if(precondition != null && !precondition.satisfied()) {
-            return Futures.immediateFailedFuture(new CancellationException("precondition false"));
+            return failInExecutor(new CancellationException("precondition false"), executor);
         }
         //TODO(maybe) in delay case (attempt > 1), if "session" is inactive,
         //     skip attempt (and dont increment attempt #)
@@ -211,7 +213,14 @@ public class GrpcClient {
             }
             return Futures.scheduleAsync(() -> call(method, precondition, request, executor,
                     retry, nextAttempt, backoff, deadline, timeoutMs), delayMs, MILLISECONDS, ses);
-        }, MoreExecutors.directExecutor());
+        }, executor != null ? executor : directExecutor());
+    }
+    
+    protected static <T> ListenableFuture<T> failInExecutor(Throwable t, Executor executor) {
+        if(executor == null) return Futures.immediateFailedFuture(t);
+        SettableFuture<T> lfut = SettableFuture.create();
+        executor.execute(() -> lfut.setException(t));
+        return lfut;
     }
 
     //TODO(maybe) for retriable RPCs consider fail-fast first timeout and longer retry timeout
@@ -683,7 +692,7 @@ public class GrpcClient {
     }
     
     private static final Class<? extends Executor> GSE_CLASS
-        = MoreExecutors.newSequentialExecutor(MoreExecutors.directExecutor()).getClass();
+        = MoreExecutors.newSequentialExecutor(directExecutor()).getClass();
     
     public static Executor serialized(Executor parent, int bufferSize) {
         return parent instanceof SerializingExecutor
