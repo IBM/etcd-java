@@ -18,7 +18,7 @@
    <modelVersion>4.0.0</modelVersion>
    <groupId>com.ibm.etcd</groupId>
    <artifactId>etcd-java</artifactId>
-   <version>0.0.8-SNAPSHOT</version>
+   <version>0.0.8</version>
    <packaging>jar</packaging>
 
    <name>etcd-java</name>
