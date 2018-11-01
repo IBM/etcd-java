@@ -132,7 +132,7 @@ KvStoreClient client = EtcdClusterConfig.fromJsonFile(filePath).getClient();
 <dependency>
     <groupId>com.ibm.etcd</groupId>
     <artifactId>etcd-java</artifactId>
-    <version>0.0.7</version>
+    <version>0.0.8</version>
 </dependency>
 
 ```
