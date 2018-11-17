@@ -161,7 +161,7 @@ public class WatchTest {
             proxy.start();
 
             // watch should be unaffected - next event seen should be the missed one
-            wu = (WatchUpdate)watchEvents.poll(4000L, TimeUnit.MILLISECONDS);
+            wu = (WatchUpdate)watchEvents.poll(5000L, TimeUnit.MILLISECONDS);
             assertEquals(bs("/watchtest/e"), wu.getEvents().get(0).getKv().getKey());
 
             watch.close();

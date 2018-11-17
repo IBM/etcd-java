@@ -200,20 +200,32 @@ public class GrpcClient {
             if((!backoff && attempt > 0) || (deadline != null && deadline.isExpired())
                     || (!(reauth = reauthIfRequired(t, baseCallOpts))
                             && !retry.retry(t, request))) return Futures.immediateFailedFuture(t);
+            
             // second case: immediate retry (first failure or after auth failure + reauth)
             if(reauth || attempt == 0 && immediateRetryLimiter.tryAcquire()) {
                 return call(method, precondition, request, executor, retry,
                         reauth ? attempt : 1, backoff, deadline, timeoutMs);
             }
-            int nextAttempt = attempt > 0 ? attempt + 1 : 2; // skip attempt # in the rate-limited case
+            int nextAttempt = attempt <= 1 ? 2 : attempt + 1; // skip attempt if we were rate-limited
+            
             // final case: retry after back-off delay
-            long delayMs = 500L * (1L << Math.min(nextAttempt-2, 4));
+            long delayMs = delayAfterFailureMs(nextAttempt);
             if(deadline != null && deadline.timeRemaining(MILLISECONDS) < delayMs) {
                 return Futures.immediateFailedFuture(t);
             }
             return Futures.scheduleAsync(() -> call(method, precondition, request, executor,
                     retry, nextAttempt, backoff, deadline, timeoutMs), delayMs, MILLISECONDS, ses);
         }, executor != null ? executor : directExecutor());
+    }
+    
+    /**
+     * @param failedAttemptNumber number of the attempt which just failed, 1-based 
+     */
+    static long delayAfterFailureMs(int failedAttemptNumber) {
+        // backoff delay pattern: 0, [500ms - 1sec), 2sec, 4sec, 8sec, 8sec, ... (jitter after first retry)
+        if(failedAttemptNumber <= 1) return 0L;
+        return failedAttemptNumber == 2 ? 500L + ThreadLocalRandom.current().nextLong(500L)
+                : (2000L << Math.min(failedAttemptNumber - 3, 2));
     }
     
     protected static <T> ListenableFuture<T> failInExecutor(Throwable t, Executor executor) {
@@ -551,14 +563,10 @@ public class GrpcClient {
                         refreshBackingStream();
                     }
                     else {
-                        if(errCount == 1) errCount++;
-                        // delay stream retry - first time random delay
-                        // between 0.5 and 1sec, then 2, 4, 8 secs
-                        long delay = 500L + (errCount == 2
-                                ? ThreadLocalRandom.current().nextLong(500L)
-                                        : 2000L * (1 << Math.min(errCount-3, 2)));
+                        // delay stream retry using backoff/jitter strategy
                         ses.schedule(ResilientBiDiStream.this::refreshBackingStream,
-                                delay, MILLISECONDS);
+                                // skip attempt in rate-limited case (errCount <=1)
+                                delayAfterFailureMs(errCount <= 2 ? 2 : errCount), MILLISECONDS);
                     }
                 } else {
                     sentCallOptions = null;
