@@ -25,11 +25,6 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
-import com.google.protobuf.GeneratedMessageV3.Builder;
-import com.ibm.etcd.client.Condition;
-import com.ibm.etcd.client.GrpcClient;
-import com.ibm.etcd.client.KeyUtils;
-import com.ibm.etcd.client.watch.EtcdWatchClient;
 import com.ibm.etcd.api.Compare;
 import com.ibm.etcd.api.Compare.CompareResult;
 import com.ibm.etcd.api.Compare.CompareTarget;
@@ -52,6 +47,11 @@ import com.ibm.etcd.api.TxnRequestOrBuilder;
 import com.ibm.etcd.api.TxnResponse;
 import com.ibm.etcd.api.WatchCreateRequest;
 import com.ibm.etcd.api.WatchCreateRequest.FilterType;
+import com.ibm.etcd.client.Condition;
+import com.ibm.etcd.client.FluentRequest.AbstractFluentRequest;
+import com.ibm.etcd.client.GrpcClient;
+import com.ibm.etcd.client.KeyUtils;
+import com.ibm.etcd.client.watch.EtcdWatchClient;
 
 import io.grpc.Deadline;
 import io.grpc.MethodDescriptor;
@@ -84,11 +84,6 @@ public class EtcdKvClient implements KvClient {
     public FluentRangeRequest get(ByteString key) {
         return new EtcdRangeRequest(key);
     }
-
-//    @Override
-//    public RangeResponse getSync(RangeRequest request) {
-//        return blockingStub.range(request); //TODO exceptions??
-//    }
 
     //TODO reinstate txn idempotence determination
     private static Predicate<TxnRequest> IDEMPOTENT_TXN = txn ->
@@ -139,12 +134,7 @@ public class EtcdKvClient implements KvClient {
     public FluentPutRequest setValue(ByteString key, ByteString value) {
         return new EtcdPutRequest(key, value, true);
     }
-    
-//    @Override
-//    public PutResponse putSync(PutRequest request) {
-//        return blockingStub.put(request);
-//    }
-    
+
     @Override
     public ListenableFuture<DeleteRangeResponse> delete(DeleteRangeRequest request) {
         return client.call(METHOD_DELETE_RANGE, request, false);
@@ -154,74 +144,12 @@ public class EtcdKvClient implements KvClient {
     public FluentDeleteRequest delete(ByteString key) {
         return new EtcdDeleteRequest(key);
     }
-    
-//    @Override
-//    public DeleteRangeResponse deleteSync(DeleteRangeRequest request) {
-//        return blockingStub.deleteRange(request);
-//    }
-    
-    @SuppressWarnings("unchecked")
-    abstract class AbstractFluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,RespT,BldT extends Builder<BldT>>
-        implements FluentRequest<FR,ReqT,RespT> {
-        protected final BldT builder;
-        protected RetryStrategy retryStrategy = RetryStrategy.BASIC;
-        protected Condition precondition;
-        protected long timeoutMs;
-        protected Deadline deadline;
-        
-        protected AbstractFluentRequest(BldT builder) {
-            this.builder = builder;
-        }
-        
-        protected abstract MethodDescriptor<ReqT,RespT> getMethod();
-        protected abstract boolean idempotent();
-        
-        @Override
-        public FR timeout(long millisecs) {
-            this.timeoutMs = millisecs;
-            return (FR)this;
-        }
-        @Override
-        public FR deadline(Deadline deadline) {
-            this.deadline = deadline;
-            return (FR)this;
-        }
-        @Override
-        final public FR backoffRetry() {
-            this.retryStrategy = RetryStrategy.BACKOFF;
-            return (FR)this;
-        }
-        @Override
-        final public FR backoffRetry(Condition precondition) {
-            this.retryStrategy = RetryStrategy.BACKOFF;
-            this.precondition = precondition;
-            return (FR)this;
-        }
-        @Override
-        final public ReqT asRequest() {
-            return (ReqT)builder.build();
-        }
-        @Override
-        public ListenableFuture<RespT> async(Executor executor) {
-            return client.call(getMethod(), precondition, (ReqT)builder.build(),
-                    executor, GrpcClient.retryDecision(idempotent()), 
-                    retryStrategy == RetryStrategy.BACKOFF, deadline, timeoutMs);
-        }
-        @Override
-        final public ListenableFuture<RespT> async() {
-            return async(null);
-        }
-        @Override
-        final public RespT sync() {
-            return GrpcClient.waitFor(this::async);
-        }
-    }
-    
+
     class EtcdRangeRequest extends AbstractFluentRequest<FluentRangeRequest,RangeRequest,
         RangeResponse,RangeRequest.Builder> implements FluentRangeRequest {
         
         EtcdRangeRequest(ByteString key) {
-            super(RangeRequest.newBuilder());
+            super(EtcdKvClient.this.client, RangeRequest.newBuilder());
             if(key != ALL_KEYS) builder.setKey(key);
             else builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
         }
@@ -309,7 +237,7 @@ public class EtcdKvClient implements KvClient {
         DeleteRangeResponse,DeleteRangeRequest.Builder> implements FluentDeleteRequest {
         
         EtcdDeleteRequest(ByteString key) {
-            super(DeleteRangeRequest.newBuilder());
+            super(EtcdKvClient.this.client, DeleteRangeRequest.newBuilder());
             if(key != ALL_KEYS) builder.setKey(key);
             else builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
         }
@@ -346,7 +274,7 @@ public class EtcdKvClient implements KvClient {
     class EtcdPutRequest extends AbstractFluentRequest<FluentPutRequest,PutRequest,
         PutResponse,PutRequest.Builder> implements FluentPutRequest {
         EtcdPutRequest() {
-            super(PutRequest.newBuilder());
+            super(EtcdKvClient.this.client, PutRequest.newBuilder());
         }
         EtcdPutRequest(ByteString key, ByteString value, boolean ignoreLease) {
             this();
@@ -386,7 +314,7 @@ public class EtcdKvClient implements KvClient {
         boolean idempotent = true; // set to false when any non-idempotent ops are added
         
         public EtcdTxnRequest() {
-            super(TxnRequest.newBuilder());
+            super(EtcdKvClient.this.client, TxnRequest.newBuilder());
         }
         @Override
         protected MethodDescriptor<TxnRequest, TxnResponse> getMethod() {

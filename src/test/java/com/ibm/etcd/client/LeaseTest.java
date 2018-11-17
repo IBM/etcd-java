@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.*;
 
 import java.util.HashSet;
@@ -29,6 +30,10 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.google.common.collect.Sets;
+import com.ibm.etcd.api.LeaseGrantRequest;
+import com.ibm.etcd.api.LeaseGrantResponse;
+import com.ibm.etcd.api.LeaseKeepAliveResponse;
+import com.ibm.etcd.api.LeaseRevokeResponse;
 import com.ibm.etcd.api.LeaseStatus;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
@@ -50,6 +55,57 @@ public class LeaseTest {
     }
     
     @Test
+    public void testOneTimeOperations() throws Exception {
+        try(KvStoreClient directClient = EtcdClient.forEndpoint("localhost", 2379)
+                .withPlainText().build()) {
+            LeaseClient leaseClient = directClient.getLeaseClient();
+            
+            // keepalive for non-existent
+            LeaseKeepAliveResponse lkar = leaseClient.keepAliveOnce(123L).get(2, SECONDS);
+            assertEquals(123L, lkar.getID());
+            assertEquals(0L, lkar.getTTL());
+            
+            // grant
+            LeaseGrantResponse lgr = leaseClient.grant(5L).sync();
+            assertEquals(5L, lgr.getTTL());
+            long id = lgr.getID();
+            assertNotEquals(0L, id);
+            
+            lkar = leaseClient.keepAliveOnce(id).get(1, SECONDS);
+            assertEquals(5L, lkar.getTTL());
+            assertEquals(id, lkar.getID());
+            
+            lgr = leaseClient.grant(10L).leaseId(456L).sync();
+            assertEquals(10L, lgr.getTTL());
+            assertNotEquals(456L, id);
+            long ttl = leaseClient.ttl(456L).get(1, SECONDS).getTTL();
+            assertTrue("was "+ttl, ttl == 9L || ttl == 10L);
+            
+            // revoke
+            assertNotNull(leaseClient.revoke(id).get(1, SECONDS));
+
+            assertEquals(-1L, leaseClient.ttl(id).get().getTTL());
+            
+            PersistentLease pl = leaseClient.maintain().start();
+            pl.get(1, SECONDS);
+            
+            // test keepalive of existing lease while there is a PL open
+            // (should share existing stream)
+            assertEquals(10L, leaseClient.keepAliveOnce(456L).get(1, SECONDS).getTTL());
+            
+            pl.close();
+            Thread.sleep(500L);
+            assertEquals(LeaseState.CLOSED, pl.getState());
+            
+            // test keepalive of existing lease still works
+            // (should go back to opening a new stream)
+            assertEquals(10L, leaseClient.keepAliveOnce(456L).get(1, SECONDS).getTTL());
+            
+            assertNotNull(leaseClient.revoke(456L).get(1, SECONDS));
+        }
+    }
+    
+    @Test
     public void testPersistentLease() throws Exception {
         
         proxy.start();
@@ -67,7 +123,7 @@ public class LeaseTest {
 
             final Object COMPLETED = new Object();
             
-            int minTtl = 5, kaFreq = 4;
+            int minTtl = 6, kaFreq = 4;
 
             PersistentLease pl = lc.maintain().minTtl(minTtl).keepAliveFreq(kaFreq)
                     .start(new StreamObserver<LeaseState>() {
@@ -88,7 +144,7 @@ public class LeaseTest {
                         }
                     });
 
-            long newId = pl.get(3L, TimeUnit.SECONDS);
+            long newId = pl.get(3L, SECONDS);
 
             assertEquals(LeaseState.ACTIVE, pl.getState());
             System.out.println(t(start)+"new lease id: "+newId);
@@ -113,13 +169,13 @@ public class LeaseTest {
             
             // state should reflect disconnection
             assertEquals(LeaseState.ACTIVE_NO_CONN,
-                    observerEvents.poll(2, TimeUnit.SECONDS));
+                    observerEvents.poll(2, SECONDS));
             
             proxy.start();
             
             // should go back to active
             assertEquals(LeaseState.ACTIVE,
-                    observerEvents.poll(4, TimeUnit.SECONDS));
+                    observerEvents.poll(6, SECONDS));
             
             Thread.sleep(500L);
             System.out.println("ttl now "+pl.getCurrentTtlSecs()+"s");
@@ -128,7 +184,7 @@ public class LeaseTest {
             proxy.kill();
             long afterKill = System.nanoTime();
             assertEquals(LeaseState.ACTIVE_NO_CONN,
-                    observerEvents.poll(2, TimeUnit.SECONDS));
+                    observerEvents.poll(2, SECONDS));
             
             // test creating 2nd lease while disconnected
             PersistentLease pl2 = lc.maintain().minTtl(minTtl).keepAliveFreq(kaFreq)
@@ -141,7 +197,7 @@ public class LeaseTest {
             
             // wait for expiry
             assertEquals(LeaseState.EXPIRED,
-                    observerEvents.poll(minTtl+kaFreq, TimeUnit.SECONDS));
+                    observerEvents.poll(minTtl+kaFreq, SECONDS));
             
             long expiredMs = (System.nanoTime()-afterKill)/1000_000L;
             System.out.println("expired after "+expiredMs+"ms");
@@ -155,14 +211,14 @@ public class LeaseTest {
             long before = System.currentTimeMillis();
             
             // second lease should now become active
-            long newLeaseId = pl2.get(20, TimeUnit.SECONDS);
+            long newLeaseId = pl2.get(20, SECONDS);
             assertTrue(newLeaseId > 0L);
             assertNotEquals(pl.getLeaseId(), newLeaseId);
             assertEquals(LeaseState.ACTIVE, pl2.getState());
             
             // should go back to active after expired
             assertEquals(LeaseState.ACTIVE,
-                    observerEvents.poll(10, TimeUnit.SECONDS));
+                    observerEvents.poll(10, SECONDS));
             System.out.println("took "+(System.nanoTime()-before)/1000_000L
                     +"ms to become active again");
 
@@ -170,8 +226,8 @@ public class LeaseTest {
             pl2.close();
 
             assertEquals(LeaseState.CLOSED,
-                    observerEvents.poll(1, TimeUnit.SECONDS));
-            assertEquals(COMPLETED, observerEvents.poll(1, TimeUnit.SECONDS));
+                    observerEvents.poll(1, SECONDS));
+            assertEquals(COMPLETED, observerEvents.poll(1, SECONDS));
             assertNull(observerEvents.poll(500, TimeUnit.MILLISECONDS));
             assertEquals(LeaseState.CLOSED, pl.getState());
             assertEquals(0, pl.getCurrentTtlSecs());
@@ -204,7 +260,7 @@ public class LeaseTest {
             assertTrue(lidsFound.containsAll(lids));
 
             client1.close();
-            client1.getInternalExecutor().awaitTermination(3, TimeUnit.SECONDS);
+            client1.getInternalExecutor().awaitTermination(3, SECONDS);
             
             lidsFound = client2.getLeaseClient().list().get()
                     .getLeasesList().stream().map(LeaseStatus::getID).collect(Collectors.toSet());

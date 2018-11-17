@@ -22,8 +22,6 @@ import java.util.concurrent.Executor;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
-import com.ibm.etcd.client.Condition;
-import com.ibm.etcd.client.watch.RevisionCompactedException;
 import com.ibm.etcd.api.DeleteRangeRequest;
 import com.ibm.etcd.api.DeleteRangeRequestOrBuilder;
 import com.ibm.etcd.api.DeleteRangeResponse;
@@ -40,6 +38,8 @@ import com.ibm.etcd.api.TxnRequestOrBuilder;
 import com.ibm.etcd.api.TxnResponse;
 import com.ibm.etcd.api.WatchCreateRequest;
 import com.ibm.etcd.api.WatchCreateRequest.FilterType;
+import com.ibm.etcd.client.Condition;
+import com.ibm.etcd.client.watch.RevisionCompactedException;
 
 import io.grpc.Deadline;
 import io.grpc.stub.StreamObserver;
@@ -54,21 +54,15 @@ public interface KvClient {
      */
     public static final ByteString ALL_KEYS = ByteString.copyFromUtf8("ALL_KEYS");
     
-    interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,RespT> {
-        ListenableFuture<RespT> async();
-        ListenableFuture<RespT> async(Executor executor);
-        RespT sync();
-        /**
-         * timeout is <b>per attempt</b>
-         */
-        FR timeout(long millisecs);
-        /**
-         * deadline is absolute for entire request
-         */
-        FR deadline(Deadline deadline);
-        FR backoffRetry();
-        FR backoffRetry(Condition precondition);
-        ReqT asRequest();
+    /**
+     * Needed for backwards binary compatibility
+     */
+    interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,RespT>
+        extends com.ibm.etcd.client.FluentRequest<FR, ReqT, RespT> {
+        @Override FR timeout(long millisecs);
+        @Override FR deadline(Deadline deadline);
+        @Override FR backoffRetry();
+        @Override FR backoffRetry(Condition precondition);
     }
     
     interface FluentRangeRequest extends FluentRequest<FluentRangeRequest,RangeRequest,RangeResponse> {
