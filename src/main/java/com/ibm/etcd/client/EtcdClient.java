@@ -286,6 +286,10 @@ public class EtcdClient implements KvStoreClient {
         // shutting down the channel. Then wait until the channel has terminated
         // and there are no outstanding non-scheduled tasks before shutting down
         // the executor.
+        // Extra complexity here is needed for versions of netty < 4.1.29.Final due
+        // to the fact that the (Nio|Epoll)EventLoop.pendingTasks() method would
+        // block on a task dispatched to the event loop. This is no longer the case
+        // in netty 4.1.29.Final onwards.
         executeWhenIdle(() -> {
             try {
                 channel.shutdown().awaitTermination(2, SECONDS);

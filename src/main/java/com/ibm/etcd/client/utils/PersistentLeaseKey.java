@@ -37,7 +37,7 @@ import com.ibm.etcd.api.RangeRequest;
 import com.ibm.etcd.api.TxnResponse;
 
 /**
- * Etcd key-value bound to a PersistentLease. If the key already exists it's
+ * Etcd key-value bound to a PersistentLease. If the key already exists its
  * value won't be changed but it will be associated with the provided lease.
  * If it doesn't already exist or is deleted by someone else, it will be
  * (re)-created with a provided default value.
