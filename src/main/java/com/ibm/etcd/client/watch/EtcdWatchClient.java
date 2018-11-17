@@ -25,6 +25,7 @@ import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -42,6 +43,7 @@ import com.ibm.etcd.api.ResponseHeader;
 import com.ibm.etcd.api.WatchCancelRequest;
 import com.ibm.etcd.api.WatchCreateRequest;
 import com.ibm.etcd.api.WatchGrpc;
+import com.ibm.etcd.api.WatchProgressRequest;
 import com.ibm.etcd.api.WatchRequest;
 import com.ibm.etcd.api.WatchResponse;
 
@@ -84,9 +86,11 @@ public class EtcdWatchClient implements Closeable {
     @GuardedBy("eventLoop")
     private final Map<Long,WatcherRecord> activeWatchers = new HashMap<>();
     
+    @GuardedBy("this")
+    private boolean progressRequested; // used when there are watches but stream is inactive
     
     public EtcdWatchClient(GrpcClient client) {
-        this(client, client.getResponseExecutor());
+        this(client, null);
     }
     
     public EtcdWatchClient(GrpcClient client, Executor executor) {
@@ -256,6 +260,29 @@ public class EtcdWatchClient implements Closeable {
         }
     }
     
+    private static final WatchRequest PROGRESS_REQUEST = WatchRequest.newBuilder()
+            .setProgressRequest(WatchProgressRequest.getDefaultInstance()).build();
+    
+    public void requestProgress() {
+        if(closed) throw new IllegalStateException("closed");
+        try {
+            eventLoop.execute(() -> {
+                synchronized(this) {
+                    StreamObserver<WatchRequest> stream = requestStream;
+                    if(stream != null) stream.onNext(PROGRESS_REQUEST);
+                    else if(!activeWatchers.isEmpty() || !pendingCreate.isEmpty()) {
+                        progressRequested = true;
+                    }
+                }
+            });
+        } catch(RejectedExecutionException ree) {
+            synchronized(this) {
+                if(closed) throw new IllegalStateException("closed");
+            }
+            throw ree;
+        }
+    }
+    
 //    @Override
     public Watch watch(WatchCreateRequest createReq, StreamObserver<WatchUpdate> observer) {
         return watch(createReq, observer, null);
@@ -343,6 +370,10 @@ public class EtcdWatchClient implements Closeable {
         if(requestStream == null) {
             logger.debug("watch stream starting");
             requestStream = client.callStream(METHOD_WATCH, responseObserver, eventLoop);
+            if(progressRequested) {
+                progressRequested = false;
+                requestStream.onNext(PROGRESS_REQUEST);
+            }
         }
         return requestStream;
     }
@@ -354,6 +385,7 @@ public class EtcdWatchClient implements Closeable {
             requestStream.onError(CANCEL_EXCEPTION);
             logger.debug("watch stream cancelled due to there being no active watches");
             requestStream = null;
+            progressRequested = false;
         }
     }
     

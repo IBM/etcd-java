@@ -85,7 +85,7 @@ public class KvTest {
             // basic delete
             assertEquals(0L, kvc.delete(bs("notthere")).sync().getDeleted());
             assertEquals(v1, kvc.delete(a).prevKv().sync().getPrevKvs(0).getValue());
-            assertEquals(0, kvc.get(bs("a")).sync().getCount());
+            assertEquals(0L, kvc.get(bs("a")).sync().getCount());
            
             PutRequest pr1 = kvc.put(a, v1).asRequest(), pr2 = kvc.put(b, v2).asRequest();
             

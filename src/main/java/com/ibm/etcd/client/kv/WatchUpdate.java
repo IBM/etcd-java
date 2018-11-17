@@ -29,7 +29,9 @@ import com.ibm.etcd.api.ResponseHeader;
  */
 public interface WatchUpdate {
 
-    public ResponseHeader getHeader();
+    ResponseHeader getHeader();
+    
+    boolean isFragment();
 
-    public List<Event> getEvents();
+    List<Event> getEvents();
 }

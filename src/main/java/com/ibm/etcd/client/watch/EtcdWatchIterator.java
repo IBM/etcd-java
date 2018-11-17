@@ -37,6 +37,7 @@ class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpdate> {
     static class CompletedUpdate implements WatchUpdate {
         final RuntimeException error;
         @Override public ResponseHeader getHeader() { return null; }
+        @Override public boolean isFragment() { return false; }
         @Override public List<Event> getEvents() { return Collections.emptyList(); }
         @Override public String toString() { return "watch complete"; }
         public CompletedUpdate(RuntimeException error) {

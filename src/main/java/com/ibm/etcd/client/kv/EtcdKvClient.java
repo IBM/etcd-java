@@ -659,4 +659,9 @@ public class EtcdKvClient implements KvClient {
         return new EtcdWatchRequest(key);
     }
     
+    @Override
+    public void requestWatchProgress() {
+        EtcdWatchClient wc = watchClient;
+        if(wc != null) wc.requestProgress();
+    }
 }

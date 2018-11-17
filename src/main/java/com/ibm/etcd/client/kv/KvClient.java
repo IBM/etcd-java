@@ -328,4 +328,16 @@ public interface KvClient {
        */
       FluentWatchRequest watch(ByteString key);
     
+      /**
+       * Requests progress reports for all of this client's open watches. This will cause
+       * each watch to receive an empty update with the current store revision and a
+       * guarantee that all relevant events corresponding to prior revisions have
+       * already been received.
+       * <p>
+       * Only supported by server versions >= XX TODO
+       * 
+       * TODO what if unsupported (older etcd server version)? .. throw or return false?
+       * 
+       */
+      void requestWatchProgress();
 }

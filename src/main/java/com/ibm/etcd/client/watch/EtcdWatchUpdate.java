@@ -39,6 +39,11 @@ public class EtcdWatchUpdate implements WatchUpdate {
     public ResponseHeader getHeader() {
         return response.getHeader();
     }
+    
+    @Override
+    public boolean isFragment() {
+        return response.getFragment();
+    }
 
     public List<Event> getEvents() {
         return response.getEventsList();

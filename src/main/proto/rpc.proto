@@ -707,7 +707,7 @@ message WatchCreateRequest {
   int64 watch_id = 7;
 
   // fragment enables splitting large revisions into multiple watch responses.
-  //bool fragment = 8; //TODO etcd-java support soon
+  bool fragment = 8;
 }
 
 message WatchCancelRequest {
