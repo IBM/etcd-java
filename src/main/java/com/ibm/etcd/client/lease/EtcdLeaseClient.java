@@ -16,34 +16,35 @@
 package com.ibm.etcd.client.lease;
 
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
-import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.*;
+import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.ACTIVE;
+import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.ACTIVE_NO_CONN;
+import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.CLOSED;
+import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.EXPIRED;
+import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.PENDING;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.io.Closeable;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.util.concurrent.AbstractFuture;
-import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.ibm.etcd.client.FutureListener;
-import com.ibm.etcd.client.GrpcClient;
-import com.ibm.etcd.client.GrpcClient.ResilientResponseObserver;
-import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
 import com.ibm.etcd.api.LeaseGrantRequest;
 import com.ibm.etcd.api.LeaseGrantResponse;
 import com.ibm.etcd.api.LeaseGrpc;
@@ -55,8 +56,14 @@ import com.ibm.etcd.api.LeaseRevokeRequest;
 import com.ibm.etcd.api.LeaseRevokeResponse;
 import com.ibm.etcd.api.LeaseTimeToLiveRequest;
 import com.ibm.etcd.api.LeaseTimeToLiveResponse;
+import com.ibm.etcd.client.FluentRequest.AbstractFluentRequest;
+import com.ibm.etcd.client.FutureListener;
+import com.ibm.etcd.client.GrpcClient;
+import com.ibm.etcd.client.GrpcClient.ResilientResponseObserver;
+import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
 
 import io.grpc.MethodDescriptor;
+import io.grpc.StatusRuntimeException;
 import io.grpc.Status.Code;
 import io.grpc.stub.StreamObserver;
 
@@ -97,7 +104,33 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     @Override
     public ListenableFuture<LeaseGrantResponse> create(long leaseId, long ttlSecs) {
         return client.call(METHOD_LEASE_GRANT, LeaseGrantRequest.newBuilder()
-                .setID(leaseId).setTTL(ttlSecs).build(), false); //TODO(maybe) could support retry somehow?
+                .setID(leaseId).setTTL(ttlSecs).build(), false);
+    }
+    
+    class EtcdGrantRequest extends AbstractFluentRequest<FluentGrantRequest,
+        LeaseGrantRequest,LeaseGrantResponse,LeaseGrantRequest.Builder> implements FluentGrantRequest {
+
+        EtcdGrantRequest(long ttl) {
+            super(EtcdLeaseClient.this.client, LeaseGrantRequest.newBuilder().setTTL(ttl));
+        }
+        @Override
+        protected MethodDescriptor<LeaseGrantRequest, LeaseGrantResponse> getMethod() {
+            return METHOD_LEASE_GRANT;
+        }
+        @Override
+        protected boolean idempotent() {
+            return false;
+        }
+        @Override
+        public FluentGrantRequest leaseId(long leaseId) {
+            builder.setID(leaseId);
+            return this;
+        }
+    }
+    
+    @Override
+    public FluentGrantRequest grant(long ttlSecs) {
+        return new EtcdGrantRequest(ttlSecs);
     }
     
     @Override
@@ -105,7 +138,18 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         return client.call(METHOD_LEASE_REVOKE,
                 LeaseRevokeRequest.newBuilder().setID(leaseId).build(), false);
     }
-
+    
+    @Override
+    public ListenableFuture<LeaseRevokeResponse> revoke(long leaseId, boolean ensureWithRetries) {
+        return !ensureWithRetries ? revoke(leaseId) : Futures.catching(client.call(METHOD_LEASE_REVOKE,
+                null, LeaseRevokeRequest.newBuilder().setID(leaseId).build(), null,
+                (t,r) -> !isNotFound(t) && !closed, true, null, 0L),
+                StatusRuntimeException.class, sre -> {
+                    if(sre.getStatus().getCode() != Code.NOT_FOUND) throw sre;
+                    return LeaseRevokeResponse.getDefaultInstance();
+                }, directExecutor());
+    }
+    
     @Override
     public ListenableFuture<LeaseTimeToLiveResponse> ttl(long leaseId, boolean includeKeys) {
         return client.call(METHOD_LEASE_TIME_TO_LIVE,
@@ -113,9 +157,51 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                 .setKeys(includeKeys).build(), true);
     }
     
+    class KeepAliveFuture extends AbstractFuture<LeaseKeepAliveResponse> {
+        final long leaseId;
+        public KeepAliveFuture(long leaseId) {
+            this.leaseId = leaseId;
+        }
+        @Override
+        protected boolean set(@Nullable LeaseKeepAliveResponse value) {
+            return super.set(value);
+        }
+        @Override
+        protected void interruptTask() {
+            Long lid = leaseId;
+            for(;;) {
+                List<KeepAliveFuture> futs = oneTimeMap.get(lid);
+                if(futs == null || !futs.contains(this)) return;
+                if(futs.size() == 1) {
+                    if(oneTimeMap.remove(lid, futs)) {
+                        leaseRemoved();
+                        return;
+                    }
+                } else if(oneTimeMap.replace(lid, futs, futs.stream()
+                        .filter(this::equals).collect(Collectors.toList()))) return;
+            }
+        }
+    }
+    
     @Override
     public ListenableFuture<LeaseKeepAliveResponse> keepAliveOnce(long leaseId) {
-        throw new UnsupportedOperationException("coming soon"); //TODO
+        Long lid = leaseId;
+        final KeepAliveFuture ourFut = new KeepAliveFuture(lid);
+        List<KeepAliveFuture> futs = oneTimeMap.get(lid), newFuts;
+        for(;;) if(futs == null) {
+            newFuts = Collections.singletonList(ourFut);
+            if((futs = oneTimeMap.putIfAbsent(lid, newFuts)) == null) {
+                leaseAdded();
+                sendKeepAlive(leaseId);
+                return ourFut;
+            }
+        } else {
+            newFuts = new ArrayList<>(futs.size() +1);
+            newFuts.addAll(futs);
+            newFuts.add(ourFut);
+            if(oneTimeMap.replace(lid, futs, newFuts)) return ourFut;
+            futs = oneTimeMap.get(lid);
+        }
     }
     
     @Override
@@ -126,8 +212,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     // ------ persistent lease impl
     
     /* Still TODO:
-     *   - back-off the retries for create failures
-     *   - keepAliveOnce
+     *   - support shared lease maintenance
      *   - (maybe) custom per-observer executors
      */
     
@@ -140,12 +225,14 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     // only used from request executor
     protected final LeaseKeepAliveRequest.Builder KAR_BUILDER = LeaseKeepAliveRequest.newBuilder();
     protected StreamObserver<LeaseKeepAliveRequest> kaReqStream;
+    protected int leaseCount;
     
     protected final Executor kaReqExecutor, respExecutor;
     
     protected final Set<LeaseRecord> allLeases = ConcurrentHashMap.newKeySet();
     protected final ConcurrentMap<Long,LeaseRecord> leaseMap = new ConcurrentHashMap<>();
-    protected final AtomicInteger leaseCount = new AtomicInteger();
+    protected final ConcurrentMap<Long,List<KeepAliveFuture>> oneTimeMap
+        = new ConcurrentHashMap<>(4);
     
     @Override
     public FluentMaintainRequest maintain() {
@@ -213,10 +300,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
 
         boolean ok = false;
         try {
-            if(leaseCount.getAndIncrement() == 0) kaReqExecutor.execute(() -> {
-                    kaReqStream = client.callStream(METHOD_LEASE_KEEP_ALIVE,
-                            responseObserver, respExecutor);
-            });
+            leaseAdded();
             respExecutor.execute(() -> rec.start(streamEstablished));
             ok = true;
         } finally {
@@ -225,14 +309,28 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         return rec;
     }
     
+    private void leaseAdded() {
+        kaReqExecutor.execute(() -> {
+            if(leaseCount++ != 0) return;
+            kaReqStream = client.callStream(METHOD_LEASE_KEEP_ALIVE,
+                    responseObserver, respExecutor);
+        });
+    }
+    
+    private void leaseRemoved() {
+        kaReqExecutor.execute(() -> {
+            if(--leaseCount == 0) {
+                kaReqStream.onCompleted();
+                kaReqStream = null;
+            }
+        });
+    }
+    
     // called from event loop
     protected void leaseClosed(LeaseRecord rec) {
         allLeases.remove(rec);
         if(rec.leaseId != 0L) leaseMap.remove(rec.leaseId, rec);
-        if(leaseCount.decrementAndGet() == 0) kaReqExecutor.execute(() -> {
-            kaReqStream.onCompleted();
-            kaReqStream = null;
-        });
+        leaseRemoved();
     }
     
     protected void sendKeepAlive(long leaseId) {
@@ -249,12 +347,14 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
     }
     
     boolean streamEstablished = false; // accessed only from responseExecutor
+    
     protected final ResilientResponseObserver<LeaseKeepAliveRequest,LeaseKeepAliveResponse> responseObserver =
             new ResilientResponseObserver<LeaseKeepAliveRequest,LeaseKeepAliveResponse>() {
 
         @Override
         public void onEstablished() {
             streamEstablished = true;
+            for(Long lid : oneTimeMap.keySet()) sendKeepAlive(lid);
             for(LeaseRecord rec : allLeases) rec.reconnected();
         }
         @Override
@@ -265,7 +365,14 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         }
         @Override
         public void onNext(LeaseKeepAliveResponse lkar) {
-            LeaseRecord rec = leaseMap.get(lkar.getID());
+            Long lid = lkar.getID();
+            List<KeepAliveFuture> oneTimeFuts = oneTimeMap.remove(lid);
+            if(oneTimeFuts != null) {
+                leaseRemoved();
+                //TODO guard against set() throwing?
+                for(KeepAliveFuture fut : oneTimeFuts) fut.set(lkar);
+            }
+            LeaseRecord rec = leaseMap.get(lid);
             if(rec != null) rec.processKeepAliveResponse(lkar);
         }
 
@@ -290,6 +397,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         final Executor eventLoop, observerExecutor;
         final int intervalSecs, minExpirySecs;
         
+        // all state is modified only prior to starting or in event loop
         ListenableFuture<LeaseGrantResponse> createFuture;
         
         long leaseId; // zero or final
@@ -458,32 +566,30 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         // called from start method and event loop
         void create() {
             if(createFuture != null || state == CLOSED) return;
-            //TODO(maybe) optimization: use eventLoop as the response executor for this call
-            createFuture = EtcdLeaseClient.this.create(leaseId, minExpirySecs+intervalSecs);
-            Futures.addCallback(createFuture, new FutureCallback<LeaseGrantResponse>() {
-                @Override public void onSuccess(LeaseGrantResponse result) {
-                    createFuture = null;
-                    if(state == CLOSED) revoke();
-                    else processGrantResponse(result);
+            long ttlSecs = minExpirySecs + intervalSecs;
+            createFuture = client.call(METHOD_LEASE_GRANT, () -> state != CLOSED,
+                    LeaseGrantRequest.newBuilder().setID(leaseId).setTTL(ttlSecs).build(),
+                    eventLoop, (t,r) -> {
+                        Code code = GrpcClient.codeFromThrowable(t);
+                        return connected && code != Code.ALREADY_EXISTS
+                                && code != Code.FAILED_PRECONDITION;
+                    },
+                    true, null, 0L); //TODO timeout TBD
+            Futures.addCallback(createFuture, (FutureListener<LeaseGrantResponse>) (result,t) -> {
+                createFuture = null;
+                if(state == CLOSED) {
+                    if(t == null || !GrpcClient.isConnectException(t)) revoke();
                 }
-                @Override public void onFailure(Throwable t) {
-                    createFuture = null;
+                else if(t != null) {
                     Code code = GrpcClient.codeFromThrowable(t);
-                    if(state == CLOSED) {
-                        if(!GrpcClient.isConnectException(t)) revoke();
-                    }
-                    else if(code == Code.ALREADY_EXISTS || code == Code.FAILED_PRECONDITION) {
+                    if(code == Code.ALREADY_EXISTS || code == Code.FAILED_PRECONDITION) {
                         // precon message is "etcdserver: lease already exists"
                         // assert leaseId != 0L
                         sendKeepAliveIfNeeded();
                     }
-                    else if(connected) {
-                        //TODO backoff retries .. tbd about createFuture field state when waiting
-//                        eventLoop.execute(LeaseRecord.this::create);
-                        create();
-                    }
                 }
-            }, eventLoop);
+                else processGrantResponse(result);
+            }, directExecutor());
         }
 
         // called from event loop, only for ttl > 0, 
@@ -528,7 +634,6 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                     // revoke will be done when future completes
                     createFuture.cancel(false);
                 }
-                //TODO(maybe) cancel in case of create retry waiting
                 leaseClosed(this);
                 if(!isDone()) observerExecutor.execute(()
                         -> setException(new IllegalStateException("closed")));
@@ -537,24 +642,15 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         
         // called from event loop
         private void revoke() {
-            if(leaseId == 0L || getCurrentTtlSecs() <= 0) return;
-            ListenableFuture<LeaseRevokeResponse> fut = sendRevokeDirect(leaseId);
+            ListenableFuture<LeaseRevokeResponse> fut = client.call(METHOD_LEASE_REVOKE,
+                    () -> (leaseId != 0 && getCurrentTtlSecs() > 0), // request precondition
+                    LeaseRevokeRequest.newBuilder().setID(leaseId).build(), eventLoop,
+                    (t,r) -> !isNotFound(t) && !closed, // retry condition
+                    true, null, 5000L);
             Futures.addCallback(fut, (FutureListener<LeaseRevokeResponse>) (v,t) -> {
-                try {
-                    eventLoop.execute(() -> {
-                        if(t == null || GrpcClient.codeFromThrowable(t) == Code.NOT_FOUND) {
-                            expiryTimeMs = 0L;
-                            keepAliveTtlSecs = 0L;
-                        } else {
-                            // no point in scheduling future retry if client is already closed
-                            if(leaseId == 0 || getCurrentTtlSecs() <= 0 || closed) return;
-                            //TODO convert to use common GrpcClient retry logic probably
-                            ses.schedule(LeaseRecord.this::revoke, 2, SECONDS);
-                        }
-                    });
-                } catch(RejectedExecutionException ree) {
-                    // ok if the client/eventloop is closed before we receive the response
-                    if(!closed) throw ree;
+                if(t == null || isNotFound(t)) {
+                    expiryTimeMs = 0L;
+                    keepAliveTtlSecs = 0L;
                 }
             }, directExecutor());
         }
@@ -590,12 +686,6 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         }
     }
     
-    ListenableFuture<LeaseRevokeResponse> sendRevokeDirect(long leaseId) {
-        return client.call(METHOD_LEASE_REVOKE,
-                LeaseRevokeRequest.newBuilder().setID(leaseId).build(),
-                false, 0L, directExecutor());
-    }
-    
     class ProtectedLeaseRecord extends LeaseRecord {
         public ProtectedLeaseRecord(long leaseId, int minExpirySecs, int intervalSecs,
                 StreamObserver<LeaseState> observer, Executor executor) {
@@ -608,4 +698,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         public void close() {}
     }
 
+    private static boolean isNotFound(Throwable t) {
+        return GrpcClient.codeFromThrowable(t) == Code.NOT_FOUND;
+    }
 }

@@ -18,7 +18,9 @@ package com.ibm.etcd.client.lease;
 import java.util.concurrent.Executor;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.ibm.etcd.client.FluentRequest;
 import com.ibm.etcd.client.lease.PersistentLease.LeaseState;
+import com.ibm.etcd.api.LeaseGrantRequest;
 import com.ibm.etcd.api.LeaseGrantResponse;
 import com.ibm.etcd.api.LeaseKeepAliveResponse;
 import com.ibm.etcd.api.LeaseLeasesResponse;
@@ -31,6 +33,10 @@ import io.grpc.stub.StreamObserver;
  * Lease operations
  */
 public interface LeaseClient {
+    
+    interface FluentGrantRequest extends FluentRequest<FluentGrantRequest,LeaseGrantRequest,LeaseGrantResponse> {
+        FluentGrantRequest leaseId(long leaseId);
+    }
     
     interface FluentMaintainRequest {
         FluentMaintainRequest leaseId(long leaseId);
@@ -61,10 +67,24 @@ public interface LeaseClient {
     
     /**
      * 
+     * @param ttlSecs
+     * @return TODO
+     */
+    FluentGrantRequest grant(long ttlSecs);
+    
+    /**
+     * 
      * @param leaseId
      * @return future for {@link LeaseRevokeResponse}
      */
     ListenableFuture<LeaseRevokeResponse> revoke(long leaseId);
+    
+    /**
+     * 
+     * @param leaseId
+     * @return future for {@link LeaseRevokeResponse}
+     */
+    ListenableFuture<LeaseRevokeResponse> revoke(long leaseId, boolean ensureWithRetries);
     
     /**
      * 
