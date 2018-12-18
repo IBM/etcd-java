@@ -163,7 +163,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         long seenUpTo = seenUpToRev;
         boolean firstTime = (seenUpTo == 0L);
         if(firstTime || entries.size() <= 20) {
-            //TODO *maybe* chunking (for large caches)
+            //TODO *maybe* chunking (for large caches), and maybe handle compaction (OUT_OF_RANGE response)
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges

@@ -82,6 +82,8 @@ public interface LeaseClient {
     /**
      * 
      * @param leaseId
+     * @param ensureWithRetries if true, the asynchronous request will be retried
+     *     continuously in the background after connection failures (between back-off pauses)
      * @return future for {@link LeaseRevokeResponse}
      */
     ListenableFuture<LeaseRevokeResponse> revoke(long leaseId, boolean ensureWithRetries);
