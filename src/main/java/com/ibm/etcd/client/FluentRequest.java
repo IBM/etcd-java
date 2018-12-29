@@ -95,11 +95,11 @@ public interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,Resp
                     retryStrategy == RetryStrategy.BACKOFF, deadline, timeoutMs);
         }
         @Override
-        final public ListenableFuture<RespT> async() {
+        public final ListenableFuture<RespT> async() {
             return async(null);
         }
         @Override
-        final public RespT sync() {
+        public final RespT sync() {
             return GrpcClient.waitFor(this::async);
         }
     }

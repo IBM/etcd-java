@@ -52,7 +52,7 @@ import io.grpc.stub.StreamObserver;
 /**
  * 
  */
-public class EtcdWatchClient implements Closeable {
+public final class EtcdWatchClient implements Closeable {
     
     private static final Logger logger = LoggerFactory.getLogger(EtcdWatchClient.class);
     
@@ -98,7 +98,7 @@ public class EtcdWatchClient implements Closeable {
     /**
      * Internal per-watch state
      */
-    class WatcherRecord {
+    final class WatcherRecord {
 
         private final StreamObserver<WatchUpdate> observer;
         private final WatchCreateRequest request;
@@ -293,7 +293,7 @@ public class EtcdWatchClient implements Closeable {
         return true;
     }
     
-    static class WatchHandle extends AbstractFuture<Boolean> implements Watch {
+    final static class WatchHandle extends AbstractFuture<Boolean> implements Watch {
         private final WeakReference<WatcherRecord> wrecRef;
         
         public WatchHandle(WatcherRecord wrec) {

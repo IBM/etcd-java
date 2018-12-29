@@ -32,7 +32,7 @@ import io.grpc.stub.StreamObserver;
 /**
  * Converts async observer-based watch to sync iterator-based watch
  */
-class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpdate> {
+final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpdate> {
     
     static class CompletedUpdate implements WatchUpdate {
         final RuntimeException error;

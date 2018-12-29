@@ -17,7 +17,7 @@ Robust etcd3 java client
 
 ## Usage
 
-Create the client. Methods are grouped into separate `KvClient` and `LeaseClient` interfaces.
+Create the client. Methods are grouped into separate `KvClient`, `LeaseClient` and `LockClient` interfaces.
 
 
 ```java
@@ -117,6 +117,14 @@ Obtain a shared persistent lease whose life is tied to the client, and subscribe
 PersistentLease sessionLease = client.getSessionLease();
 sessionLease.addStateObserver(myObserver);
 
+```
+
+Establish a named lock using the client's session lease, then release it
+
+```java
+ByteString lockKey = lockClient.lock(name).sync().getKey();
+// ...
+lockClient.unlock(lockKey).sync();
 ```
 
 Instantiate a client using a cluster configuration JSON file
