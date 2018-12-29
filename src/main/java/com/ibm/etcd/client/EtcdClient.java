@@ -47,7 +47,9 @@ import com.ibm.etcd.api.AuthGrpc;
 import com.ibm.etcd.api.AuthenticateRequest;
 import com.ibm.etcd.api.AuthenticateResponse;
 import com.ibm.etcd.client.kv.EtcdKvClient;
+import com.ibm.etcd.client.kv.EtcdLockClient;
 import com.ibm.etcd.client.kv.KvClient;
+import com.ibm.etcd.client.kv.LockClient;
 import com.ibm.etcd.client.lease.EtcdLeaseClient;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
@@ -103,6 +105,7 @@ public class EtcdClient implements KvStoreClient {
     
     private final EtcdKvClient kvClient;
     private volatile LeaseClient leaseClient; // lazy-instantiated
+    private volatile LockClient lockClient; // lazy-instantiated
     private volatile PersistentLease sessionLease; // lazy-instantiated
     
     public static class Builder {
@@ -418,6 +421,17 @@ public class EtcdClient implements KvStoreClient {
         if(lc == null) synchronized(this) {
             if((lc=leaseClient) == null) {
                 leaseClient = lc = new EtcdLeaseClient(grpc);
+            }
+        }
+        return lc;
+    }
+    
+    @Override
+    public LockClient getLockClient() {
+        LockClient lc = lockClient;
+        if(lc == null) synchronized(this) {
+            if((lc=lockClient) == null) {
+                lockClient = lc = new EtcdLockClient(grpc, this);
             }
         }
         return lc;

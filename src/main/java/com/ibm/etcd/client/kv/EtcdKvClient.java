@@ -57,7 +57,7 @@ import io.grpc.Deadline;
 import io.grpc.MethodDescriptor;
 import io.grpc.stub.StreamObserver;
 
-public class EtcdKvClient implements KvClient {
+public final class EtcdKvClient implements KvClient {
     
     // avoid volatile read on every invocation
     private static final MethodDescriptor<RangeRequest,RangeResponse> METHOD_RANGE =
@@ -145,7 +145,7 @@ public class EtcdKvClient implements KvClient {
         return new EtcdDeleteRequest(key);
     }
 
-    class EtcdRangeRequest extends AbstractFluentRequest<FluentRangeRequest,RangeRequest,
+    final class EtcdRangeRequest extends AbstractFluentRequest<FluentRangeRequest,RangeRequest,
         RangeResponse,RangeRequest.Builder> implements FluentRangeRequest {
         
         EtcdRangeRequest(ByteString key) {
@@ -233,7 +233,7 @@ public class EtcdKvClient implements KvClient {
         }
     }
     
-    class EtcdDeleteRequest extends AbstractFluentRequest<FluentDeleteRequest,DeleteRangeRequest,
+    final class EtcdDeleteRequest extends AbstractFluentRequest<FluentDeleteRequest,DeleteRangeRequest,
         DeleteRangeResponse,DeleteRangeRequest.Builder> implements FluentDeleteRequest {
         
         EtcdDeleteRequest(ByteString key) {
@@ -271,7 +271,7 @@ public class EtcdKvClient implements KvClient {
         }
     }
     
-    class EtcdPutRequest extends AbstractFluentRequest<FluentPutRequest,PutRequest,
+    final class EtcdPutRequest extends AbstractFluentRequest<FluentPutRequest,PutRequest,
         PutResponse,PutRequest.Builder> implements FluentPutRequest {
         EtcdPutRequest() {
             super(EtcdKvClient.this.client, PutRequest.newBuilder());
@@ -305,7 +305,7 @@ public class EtcdKvClient implements KvClient {
         }
     }
     
-    class EtcdTxnRequest extends AbstractFluentRequest<FluentTxnRequest,TxnRequest,
+    final class EtcdTxnRequest extends AbstractFluentRequest<FluentTxnRequest,TxnRequest,
         TxnResponse,TxnRequest.Builder> implements FluentTxnRequest {
         
         final Compare.Builder cmpBld = Compare.newBuilder(); //reused
@@ -359,7 +359,7 @@ public class EtcdKvClient implements KvClient {
                     : (TXN_OPS = new EtcdTxnOps());
         }
         
-        class EtcdCmpTarget implements FluentCmpTarget {
+        final class EtcdCmpTarget implements FluentCmpTarget {
             @Override
             public FluentCmpTarget allInRange(ByteString rangeEnd) {
                 cmpBld.setRangeEnd(rangeEnd);
@@ -406,7 +406,7 @@ public class EtcdKvClient implements KvClient {
             }
         }
         
-        class EtcdTxnOps implements FluentTxnSuccOps {
+        final class EtcdTxnOps implements FluentTxnSuccOps {
             private final RequestOp.Builder opBld = RequestOp.newBuilder();
             private boolean succ = true;
             
@@ -509,7 +509,7 @@ public class EtcdKvClient implements KvClient {
         }
     }
     
-    class EtcdWatchRequest implements FluentWatchRequest {
+    final class EtcdWatchRequest implements FluentWatchRequest {
         private final WatchCreateRequest.Builder builder = WatchCreateRequest.newBuilder();
         
         private Executor executor;

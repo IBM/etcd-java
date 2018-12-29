@@ -70,7 +70,7 @@ import io.grpc.stub.StreamObserver;
 /**
  * 
  */
-public class EtcdLeaseClient implements LeaseClient, Closeable {
+public final class EtcdLeaseClient implements LeaseClient, Closeable {
     
     private static final Logger logger = LoggerFactory.getLogger(EtcdLeaseClient.class);
     
@@ -107,7 +107,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                 .setID(leaseId).setTTL(ttlSecs).build(), false);
     }
     
-    class EtcdGrantRequest extends AbstractFluentRequest<FluentGrantRequest,
+    final class EtcdGrantRequest extends AbstractFluentRequest<FluentGrantRequest,
         LeaseGrantRequest,LeaseGrantResponse,LeaseGrantRequest.Builder> implements FluentGrantRequest {
 
         EtcdGrantRequest(long ttl) {
@@ -157,7 +157,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
                 .setKeys(includeKeys).build(), true);
     }
     
-    class KeepAliveFuture extends AbstractFuture<LeaseKeepAliveResponse> {
+    final class KeepAliveFuture extends AbstractFuture<LeaseKeepAliveResponse> {
         final long leaseId;
         public KeepAliveFuture(long leaseId) {
             this.leaseId = leaseId;
@@ -686,7 +686,7 @@ public class EtcdLeaseClient implements LeaseClient, Closeable {
         }
     }
     
-    class ProtectedLeaseRecord extends LeaseRecord {
+    final class ProtectedLeaseRecord extends LeaseRecord {
         public ProtectedLeaseRecord(long leaseId, int minExpirySecs, int intervalSecs,
                 StreamObserver<LeaseState> observer, Executor executor) {
             super(leaseId, minExpirySecs, intervalSecs, observer, executor);

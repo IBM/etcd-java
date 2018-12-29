@@ -28,7 +28,7 @@ import com.ibm.etcd.api.WatchResponse;
 /**
  * @see WatchUpdate
  */
-public class EtcdWatchUpdate implements WatchUpdate {
+final class EtcdWatchUpdate implements WatchUpdate {
 
     private final WatchResponse response;
 
