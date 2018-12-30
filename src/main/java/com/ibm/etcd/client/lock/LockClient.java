@@ -13,7 +13,7 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-package com.ibm.etcd.client.kv;
+package com.ibm.etcd.client.lock;
 
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.api.LockRequest;

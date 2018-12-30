@@ -18,9 +18,9 @@ package com.ibm.etcd.client;
 import java.io.Closeable;
 
 import com.ibm.etcd.client.kv.KvClient;
-import com.ibm.etcd.client.kv.LockClient;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
+import com.ibm.etcd.client.lock.LockClient;
 
 public interface KvStoreClient extends Closeable {
 

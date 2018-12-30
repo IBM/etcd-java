@@ -178,7 +178,7 @@ public class GrpcClient {
     public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method, Condition precondition,
             ReqT request, Executor executor, RetryDecision<ReqT> retry, boolean backoff,
             Deadline deadline, long timeoutMs) {
-        return call(method, precondition, request, executor, retry, 0, backoff, null, timeoutMs);
+        return call(method, precondition, request, executor, retry, 0, backoff, deadline, timeoutMs);
     }
     
     // deadline is for entire request (including retry pauses),

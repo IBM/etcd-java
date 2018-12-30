@@ -47,12 +47,12 @@ import com.ibm.etcd.api.AuthGrpc;
 import com.ibm.etcd.api.AuthenticateRequest;
 import com.ibm.etcd.api.AuthenticateResponse;
 import com.ibm.etcd.client.kv.EtcdKvClient;
-import com.ibm.etcd.client.kv.EtcdLockClient;
 import com.ibm.etcd.client.kv.KvClient;
-import com.ibm.etcd.client.kv.LockClient;
 import com.ibm.etcd.client.lease.EtcdLeaseClient;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
+import com.ibm.etcd.client.lock.EtcdLockClient;
+import com.ibm.etcd.client.lock.LockClient;
 
 import io.grpc.Attributes;
 import io.grpc.CallCredentials;
