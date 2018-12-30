@@ -30,10 +30,8 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.google.common.collect.Sets;
-import com.ibm.etcd.api.LeaseGrantRequest;
 import com.ibm.etcd.api.LeaseGrantResponse;
 import com.ibm.etcd.api.LeaseKeepAliveResponse;
-import com.ibm.etcd.api.LeaseRevokeResponse;
 import com.ibm.etcd.api.LeaseStatus;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;

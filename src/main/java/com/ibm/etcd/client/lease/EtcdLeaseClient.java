@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -73,6 +74,8 @@ import io.grpc.stub.StreamObserver;
 public final class EtcdLeaseClient implements LeaseClient, Closeable {
     
     private static final Logger logger = LoggerFactory.getLogger(EtcdLeaseClient.class);
+    
+    private static final Exception CANCEL_EXCEPTION = new CancellationException();
     
     // avoid volatile read on every invocation
     private static final MethodDescriptor<LeaseGrantRequest,LeaseGrantResponse> METHOD_LEASE_GRANT =
@@ -321,7 +324,8 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
     private void leaseRemoved() {
         kaReqExecutor.execute(() -> {
             if(--leaseCount == 0) {
-                kaReqStream.onCompleted();
+                //TODO probably later change to use ClientCallStreamObserver.cancel()
+                kaReqStream.onError(CANCEL_EXCEPTION);
                 kaReqStream = null;
             }
         });
@@ -345,6 +349,11 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         if(closed) return;
         closed = true;
         for(LeaseRecord rec : allLeases) rec.doClose(); // this is async
+        for (Iterator<List<KeepAliveFuture>> it = oneTimeMap.values().iterator(); it.hasNext();) {
+            for(KeepAliveFuture fut : it.next()) fut.cancel(true);
+            it.remove();
+            leaseRemoved();
+        }
     }
     
     boolean streamEstablished = false; // accessed only from responseExecutor
@@ -379,6 +388,8 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         @Override
         public void onError(Throwable t) {
+            if(closed || GrpcClient.causedBy(t, CancellationException.class)) return;
+            
             streamEstablished = false;
             //TODO review fatal cases
             kaReqExecutor.execute(() -> {
