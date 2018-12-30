@@ -101,6 +101,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
     
     // ------ simple lease APIs
     
+    @Deprecated
     @Override
     public ListenableFuture<LeaseGrantResponse> create(long leaseId, long ttlSecs) {
         return client.call(METHOD_LEASE_GRANT, LeaseGrantRequest.newBuilder()

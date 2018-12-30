@@ -53,22 +53,30 @@ public interface LeaseClient {
      * @param leaseId
      * @param ttlSecs
      * @return future for {@link LeaseGrantResponse}
+     * 
+     * @deprecated use the more flexible {@link #grant(long)}
      */
+    @Deprecated
     ListenableFuture<LeaseGrantResponse> create(long leaseId, long ttlSecs);
     
     /**
      * 
      * @param ttlSecs
      * @return future for {@link LeaseGrantResponse}
+     * 
+     * @deprecated use the more flexible {@link #grant(long)}
      */
+    @Deprecated
     default ListenableFuture<LeaseGrantResponse> create(long ttlSecs) {
         return create(0L, ttlSecs);
     }
     
     /**
+     * Start a fluent grant request for "one time" lease establishment. If the lease
+     * is to be kept alive for some period, consider creating a {@link PersistentLease}
+     * via the {@link #maintain()} method.
      * 
      * @param ttlSecs
-     * @return TODO
      */
     FluentGrantRequest grant(long ttlSecs);
     
