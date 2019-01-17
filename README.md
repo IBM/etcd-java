@@ -26,6 +26,7 @@ KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379).withPlainText()
 
 KvClient kvClient = client.getKvClient();
 LeaseClient leaseClient = client.getLeaseClient();
+LockClient lockClient = client.getLockClient();
 
 ```
 
