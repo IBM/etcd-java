@@ -15,6 +15,8 @@ Robust etcd3 java client
 - Support for connecting to multi-endpoint [IBM Compose](https://www.ibm.com/cloud/compose/etcd) etcd deployments over TLS
 - Currently doesn't cover all parts of the etcd-server API, in particular those related to cluster administration such as maintenance, cluster and auth management
 
+etcd-java requires Java 8 or higher.
+
 ## Usage
 
 Create the client. Methods are grouped into separate `KvClient`, `LeaseClient` and `LockClient` interfaces.
