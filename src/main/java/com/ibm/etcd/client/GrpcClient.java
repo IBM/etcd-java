@@ -24,13 +24,14 @@ import java.net.NoRouteToHostException;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -706,34 +707,56 @@ public class GrpcClient {
         return parent instanceof SerializingExecutor
                 || parent instanceof io.grpc.internal.SerializingExecutor
                 || parent instanceof OrderedEventExecutor
-                || GSE_CLASS.isAssignableFrom(parent.getClass())
+                || parent.getClass() == GSE_CLASS
                 ? parent : new SerializingExecutor(parent, bufferSize);
     }
-    
+
     /**
      * Equivalent to the executor used in grpc ClientCalls class for blocking calls
      */
     @SuppressWarnings("serial")
-    private static final class ThreadlessExecutor extends LinkedBlockingQueue<Runnable> implements Executor  {
+    private static final class ThreadlessExecutor extends ConcurrentLinkedQueue<Runnable>
+      implements Executor {
         private static final Logger logger = LoggerFactory.getLogger(ThreadlessExecutor.class);
+
+        private volatile Thread waiter;
 
         ThreadlessExecutor() {}
 
         public void waitAndDrain() throws InterruptedException {
-            Runnable runnable = take();
-            while (runnable != null) {
+            final Thread currentThread = Thread.currentThread();
+            throwIfInterrupted(currentThread);
+            Runnable runnable = poll();
+            if (runnable == null) {
+                waiter = currentThread;
+                try {
+                    while ((runnable = poll()) == null) {
+                        LockSupport.park(this);
+                        throwIfInterrupted(currentThread);
+                    }
+                } finally {
+                    waiter = null;
+                }
+            }
+            do {
                 try {
                     runnable.run();
                 } catch (Throwable t) {
                     Throwables.throwIfInstanceOf(t, Error.class);
                     logger.warn("Runnable threw exception", t);
                 }
-                runnable = poll();
+            } while ((runnable = poll()) != null);
+        }
+
+        private static void throwIfInterrupted(Thread currentThread) throws InterruptedException {
+            if (currentThread.isInterrupted()) {
+                throw new InterruptedException();
             }
         }
         @Override
         public void execute(Runnable runnable) {
             add(runnable);
+            LockSupport.unpark(waiter); // no-op if null
         }
     }
 }
