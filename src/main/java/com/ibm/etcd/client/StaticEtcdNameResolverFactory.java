@@ -48,8 +48,8 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
         final NameResolver resolver;
         List<EquivalentAddressGroup> eagList = Collections.emptyList();
         
-        public SubResolver(URI uri) {
-            this.resolver = DNS_PROVIDER.newNameResolver(uri, Attributes.EMPTY);
+        public SubResolver(URI uri, NameResolver.Helper helper) {
+            this.resolver = DNS_PROVIDER.newNameResolver(uri, helper);
         }
     }
     
@@ -71,12 +71,12 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
     }
     
     @Override
-    public NameResolver newNameResolver(URI targetUri, Attributes params) {
+    public NameResolver newNameResolver(URI targetUri, NameResolver.Helper helper) {
         if(!ETCD.equals(targetUri.getScheme())) return null;
         if(uris.length == 1) {
-            return new SubResolver(uris[0]).resolver;
+            return new SubResolver(uris[0], helper).resolver;
         }
-        SubResolver[] resolvers = createSubResolvers();
+        SubResolver[] resolvers = createSubResolvers(helper);
         return new NameResolver() {
             int currentCount = 0;
             @Override
@@ -119,11 +119,11 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
         };
     }
 
-    private SubResolver[] createSubResolvers() {
+    private SubResolver[] createSubResolvers(NameResolver.Helper helper) {
         int count = uris.length;
         SubResolver[] resolvers = new SubResolver[count];
         for(int i=0;i< count;i++) {
-            resolvers[i] = new SubResolver(uris[i]);
+            resolvers[i] = new SubResolver(uris[i], helper);
         }
         return resolvers;
     }

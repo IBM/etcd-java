@@ -54,7 +54,6 @@ import com.ibm.etcd.client.lease.PersistentLease;
 import com.ibm.etcd.client.lock.EtcdLockClient;
 import com.ibm.etcd.client.lock.LockClient;
 
-import io.grpc.Attributes;
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
 import io.grpc.ManagedChannel;
@@ -163,7 +162,7 @@ public class EtcdClient implements KvStoreClient {
         }
         
         public Builder withPlainText() {
-            chanBuilder.usePlaintext(true);
+            chanBuilder.usePlaintext();
             return this;
         }
         
@@ -359,7 +358,7 @@ public class EtcdClient implements KvStoreClient {
             private final ListenableFuture<Metadata> futureTokenHeader =
                     Futures.transform(authenticate(), ar -> tokenHeader = tokenHeader(ar), directExecutor());
             @Override
-            public void applyRequestMetadata(MethodDescriptor<?, ?> method, Attributes attrs,
+            public void applyRequestMetadata(RequestInfo requestInfo,
                     Executor appExecutor, MetadataApplier applier) {
                 Metadata tokHeader = tokenHeader;
                 if(tokHeader != null) applier.apply(tokHeader);
