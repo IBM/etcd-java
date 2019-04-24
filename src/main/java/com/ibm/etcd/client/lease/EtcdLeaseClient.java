@@ -39,7 +39,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -167,7 +166,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             this.leaseId = leaseId;
         }
         @Override
-        protected boolean set(@Nullable LeaseKeepAliveResponse value) {
+        protected boolean set(LeaseKeepAliveResponse value) {
             return super.set(value);
         }
         @Override
@@ -427,8 +426,8 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             this.observers = observer == null ? new CopyOnWriteArrayList<>()
                     : new CopyOnWriteArrayList<>(Collections.singletonList(observer));
             this.eventLoop = GrpcClient.serialized(ses);
-            this.observerExecutor = GrpcClient.serialized(executor != null ? executor
-                    : client.getResponseExecutor());
+            this.observerExecutor = GrpcClient.serialized(executor != null ?
+                    executor : client.getResponseExecutor());
         }
         
         @Override
@@ -673,7 +672,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         public long getCurrentTtlSecs() {
             long expires = expiryTimeMs;
             if(expires <= 0L) return expires;
-            expires = expires - System.currentTimeMillis();
+            expires -= System.currentTimeMillis();
             return expires < 0L ? 0L : expires/1000L;
         }
         
