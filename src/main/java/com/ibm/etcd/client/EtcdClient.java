@@ -80,33 +80,32 @@ public class EtcdClient implements KvStoreClient {
 
     private static final Key<String> TOKEN_KEY =
             Key.of("token", Metadata.ASCII_STRING_MARSHALLER);
-    
+
     // avoid volatile read on every invocation
     private static final MethodDescriptor<AuthenticateRequest,AuthenticateResponse> METHOD_AUTHENTICATE =
             AuthGrpc.getAuthenticateMethod();
-    
+
     public static final int DEFAULT_PORT = 2379; // default etcd server port
 
-    private static final LeaseClient CLOSED =
-            GrpcClient.sentinel(LeaseClient.class);
+    private static final LeaseClient CLOSED = GrpcClient.sentinel(LeaseClient.class);
 
     public static final long DEFAULT_TIMEOUT_MS = 10_000L; // 10sec default
     public static final int DEFAULT_SESSION_TIMEOUT_SECS = 20; // 20sec default
-    
+
     private final int sessionTimeoutSecs;
-    
+
     private final ByteString name, password;
-    
+
     private final MultithreadEventLoopGroup internalExecutor;
     private final GrpcClient grpc;
-    
+
     private final ManagedChannel channel;
-    
+
     private final EtcdKvClient kvClient;
     private volatile LeaseClient leaseClient; // lazy-instantiated
     private volatile LockClient lockClient; // lazy-instantiated
     private volatile PersistentLease sessionLease; // lazy-instantiated
-    
+
     public static class Builder {
         final private NettyChannelBuilder chanBuilder;
         private ByteString name, password;
@@ -116,28 +115,28 @@ public class EtcdClient implements KvStoreClient {
         private Executor executor; // for call-backs
         private boolean sendViaEventLoop = true; // default true
         private int sessTimeoutSecs = DEFAULT_SESSION_TIMEOUT_SECS;
-        
+
         Builder(NettyChannelBuilder chanBuilder) {
             this.chanBuilder = chanBuilder;
         }
-        
+
         public Builder withCredentials(ByteString name, ByteString password) {
             this.name = name;
             this.password = password;
             return this;
         }
-        
+
         public Builder withCredentials(String name, String password) {
             this.name = ByteString.copyFromUtf8(name);
             this.password = ByteString.copyFromUtf8(password);
             return this;
         }
-        
+
         public Builder withImmediateAuth() {
             preemptAuth = true;
             return this;
         }
-        
+
         /**
          * subject to change - threads to use for <b>internal</b> executor
          */
@@ -145,141 +144,145 @@ public class EtcdClient implements KvStoreClient {
             this.threads = threads;
             return this;
         }
-        
+
         public Builder sendViaEventLoop(boolean sendViaEventLoop) {
             this.sendViaEventLoop = sendViaEventLoop;
             return this;
         }
-        
+
         public Builder withUserExecutor(Executor executor) {
             this.executor = executor;
             return this;
         }
-        
+
         public Builder withDefaultTimeout(long value, TimeUnit unit) {
             this.defaultTimeoutMs = TimeUnit.MILLISECONDS.convert(value, unit);
             return this;
         }
-        
+
         public Builder withPlainText() {
             chanBuilder.usePlaintext();
             return this;
         }
-        
+
         public Builder withCaCert(ByteSource certSource) throws IOException, SSLException {
-            try(InputStream cert = certSource.openStream()) {
+            try (InputStream cert = certSource.openStream()) {
                 chanBuilder.sslContext(GrpcSslContexts.forClient().trustManager(cert).build());
             }
             return this;
         }
-        
+
         public Builder withTrustManager(TrustManagerFactory tmf) throws SSLException {
             chanBuilder.sslContext(GrpcSslContexts.forClient().trustManager(tmf).build());
             return this;
         }
-        
+
         public Builder withSessionTimeoutSecs(int timeoutSecs) {
-            if(timeoutSecs < 1) {
-                throw new IllegalArgumentException("invalid session timeout: "+timeoutSecs);
+            if (timeoutSecs < 1) {
+                throw new IllegalArgumentException("invalid session timeout: " + timeoutSecs);
             }
             this.sessTimeoutSecs = timeoutSecs;
             return this;
         }
-        
+
         public Builder withMaxInboundMessageSize(int sizeInBytes) {
             chanBuilder.maxInboundMessageSize(sizeInBytes);
             return this;
         }
-        
+
         public EtcdClient build() {
             return new EtcdClient(chanBuilder, defaultTimeoutMs, name, password,
                     preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
         }
     }
-    
+
     private static int defaultThreadCount() {
         return Math.min(6, Runtime.getRuntime().availableProcessors());
     }
-    
+
     public static Builder forEndpoint(String host, int port) {
         String target = GrpcUtil.authorityFromHostAndPort(host, port);
         return new Builder(NettyChannelBuilder.forTarget(target));
     }
-    
+
     public static Builder forEndpoints(List<String> endpoints) {
         NettyChannelBuilder ncb = NettyChannelBuilder
                 .forTarget(StaticEtcdNameResolverFactory.ETCD)
                 .nameResolverFactory(new StaticEtcdNameResolverFactory(endpoints));
         return new Builder(ncb);
     }
-    
+
     public static Builder forEndpoints(String endpoints) {
         return forEndpoints(Arrays.asList(endpoints.split(",")));
     }
-    
+
     EtcdClient(NettyChannelBuilder chanBuilder, long defaultTimeoutMs,
             ByteString name, ByteString password, boolean initialAuth,
             int threads, Executor userExecutor, boolean sendViaEventLoop,
             int sessTimeoutSecs) {
 
-        if(name == null && password != null) {
+        if (name == null && password != null) {
             throw new IllegalArgumentException("password without name");
         }
         this.name = name;
         this.password = password;
         this.sessionTimeoutSecs = sessTimeoutSecs;
-        
+
         chanBuilder.keepAliveTime(10L, SECONDS);
         chanBuilder.keepAliveTimeout(8L, SECONDS);
-        
-        int connTimeout = Math.min((int)defaultTimeoutMs, 6000);
+
+        int connTimeout = Math.min((int) defaultTimeoutMs, 6000);
         chanBuilder.withOption(ChannelOption.CONNECT_TIMEOUT_MILLIS, connTimeout);
-        
+
         //TODO loadbalancer TBD
 //      chanBuilder.loadBalancerFactory(RoundRobinLoadBalancerFactory.getInstance());
-        
+
         ThreadFactory tfac = new ThreadFactoryBuilder().setDaemon(true)
                 .setThreadFactory(EtcdEventThread::new)
                 .setNameFormat("etcd-event-pool-%d").build();
-        
+
         Class<? extends Channel> channelType;
-        if(Epoll.isAvailable()) {
+        if (Epoll.isAvailable()) {
             this.internalExecutor = new EpollEventLoopGroup(threads, tfac);
             channelType = EpollSocketChannel.class;
         } else {
             this.internalExecutor = new NioEventLoopGroup(threads, tfac);
             channelType = NioSocketChannel.class;
         }
-        
+
         chanBuilder.eventLoopGroup(internalExecutor).channelType(channelType);
-        
-        if(userExecutor == null) {
+
+        if (userExecutor == null) {
             //TODO default chan executor TBD
             userExecutor = Executors.newCachedThreadPool(
                     new ThreadFactoryBuilder().setDaemon(true)
                     .setNameFormat("etcd-callback-thread-%d").build());
         }
         chanBuilder.executor(userExecutor);
-        
+
         this.channel = chanBuilder.build();
-        
+
         Predicate<Throwable> rr = name != null ? EtcdClient::reauthRequired : null;
         Supplier<CallCredentials> rc = name != null ? this::refreshCredentials : null;
-        
+
         this.grpc = new GrpcClient(channel, rr, rc, internalExecutor,
                 () -> Thread.currentThread() instanceof EtcdEventThread,
                 userExecutor, sendViaEventLoop, defaultTimeoutMs);
-        if(initialAuth) grpc.authenticateNow();
+        if (initialAuth) {
+            grpc.authenticateNow();
+        }
 
         this.kvClient = new EtcdKvClient(grpc);
     }
-    
+
     @Override
     public void close() {
-        if(leaseClient == CLOSED) return;
+        if (leaseClient == CLOSED) {
+            return;
+        }
         kvClient.close();
-        synchronized(this) {
-            if(leaseClient instanceof EtcdLeaseClient) {
+        synchronized (this) {
+            if (leaseClient instanceof EtcdLeaseClient) {
                 ((EtcdLeaseClient)leaseClient).close();
             }
             leaseClient = CLOSED;
@@ -299,7 +302,7 @@ public class EtcdClient implements KvStoreClient {
             executeWhenIdle(() -> internalExecutor.shutdownGracefully(0, 1, SECONDS));
         });
     }
-    
+
     /**
      * Execute the provided task in the EventLoopGroup only once there
      * are no more running/queued tasks (but might be future scheduled tasks).
@@ -313,18 +316,23 @@ public class EtcdClient implements KvStoreClient {
         // is re-called recursively (in an async context)
         CyclicBarrier cb = new CyclicBarrier(internalExecutor.executorCount(), () -> {
             int rt = remainingTasks.get();
-            if(rt == -1) remainingTasks.incrementAndGet();
-            else if(rt > 0) executeWhenIdle(task);
-            else internalExecutor.execute(task);
+            if (rt == -1) {
+                remainingTasks.incrementAndGet();
+            } else if (rt > 0) {
+                executeWhenIdle(task);
+            } else {
+                internalExecutor.execute(task);
+            }
         });
         internalExecutor.forEach(ex -> ex.execute(new Runnable() {
             @Override public void run() {
-                SingleThreadEventLoop stel = (SingleThreadEventLoop)ex;
+                SingleThreadEventLoop stel = (SingleThreadEventLoop) ex;
                 try {
-                    if(stel.pendingTasks() > 0) ex.execute(this);
-                    else {
+                    if (stel.pendingTasks() > 0) {
+                        ex.execute(this);
+                    } else {
                         cb.await();
-                        if(stel.pendingTasks() > 0) {
+                        if (stel.pendingTasks() > 0) {
                             remainingTasks.incrementAndGet();
                         }
                         cb.await();
@@ -335,13 +343,13 @@ public class EtcdClient implements KvStoreClient {
             }
         }));
     }
-    
+
     public boolean isClosed() {
         return leaseClient == CLOSED;
     }
-    
+
     // ------ authentication logic
-    
+
     protected static boolean reauthRequired(Throwable error) {
         Code statusCode = GrpcClient.codeFromThrowable(error);
         return statusCode == Code.UNAUTHENTICATED ||
@@ -350,7 +358,7 @@ public class EtcdClient implements KvStoreClient {
                 (statusCode == Code.CANCELLED
                 && reauthRequired(error.getCause())));
     }
-    
+
     private CallCredentials refreshCredentials() {
         return new CallCredentials() {
             private Metadata tokenHeader; //TODO volatile TBD
@@ -361,14 +369,15 @@ public class EtcdClient implements KvStoreClient {
             public void applyRequestMetadata(RequestInfo requestInfo,
                     Executor appExecutor, MetadataApplier applier) {
                 Metadata tokHeader = tokenHeader;
-                if(tokHeader != null) applier.apply(tokHeader);
-                else futureTokenHeader.addListener(() -> {
+                if (tokHeader != null) {
+                    applier.apply(tokHeader);
+                } else futureTokenHeader.addListener(() -> {
                     try {
                         applier.apply(futureTokenHeader.get());
-                    } catch(ExecutionException|InterruptedException ee) { // (IE won't be thrown)
+                    } catch (ExecutionException | InterruptedException ee) { // (IE won't be thrown)
                         Status failStatus = Status.fromThrowable(ee.getCause());
                         Code code = failStatus != null ? failStatus.getCode() : null;
-                        if(code != Code.INVALID_ARGUMENT
+                        if (code != Code.INVALID_ARGUMENT
                                 && (System.currentTimeMillis() - authTime) > 15_000L) {
                             // this will force another auth attempt
                             failStatus = Status.UNAUTHENTICATED.withDescription("re-attempt re-auth");
@@ -381,13 +390,13 @@ public class EtcdClient implements KvStoreClient {
             public void thisUsesUnstableApi() {}
         };
     }
-    
+
     private static Metadata tokenHeader(AuthenticateResponse authResponse) {
         Metadata header = new Metadata();
         header.put(TOKEN_KEY, authResponse.getToken());
         return header;
     }
-    
+
     private ListenableFuture<AuthenticateResponse> authenticate() {
         AuthenticateRequest request = AuthenticateRequest.newBuilder()
                 .setNameBytes(name).setPasswordBytes(password).build();
@@ -400,15 +409,15 @@ public class EtcdClient implements KvStoreClient {
                         : grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
                 directExecutor());
     }
-    
+
     protected static boolean retryAuthRequest(Throwable error) {
         Status status = Status.fromThrowable(error);
         Code statusCode = status != null ? status.getCode() : null;
         return statusCode == Code.UNAVAILABLE && GrpcClient.isConnectException(error);
     }
-    
+
     // ------ individual client getters
-    
+
     @Override
     public KvClient getKvClient() {
         return kvClient;
@@ -417,64 +426,66 @@ public class EtcdClient implements KvStoreClient {
     @Override
     public LeaseClient getLeaseClient() {
         LeaseClient lc = leaseClient;
-        if(lc == null) synchronized(this) {
-            if((lc=leaseClient) == null) {
+        if (lc == null) synchronized (this) {
+            if ((lc = leaseClient) == null) {
                 leaseClient = lc = new EtcdLeaseClient(grpc);
             }
         }
         return lc;
     }
-    
+
     @Override
     public LockClient getLockClient() {
         LockClient lc = lockClient;
-        if(lc == null) synchronized(this) {
-            if((lc=lockClient) == null) {
+        if (lc == null) synchronized (this) {
+            if ((lc = lockClient) == null) {
                 lockClient = lc = new EtcdLockClient(grpc, this);
             }
         }
         return lc;
     }
-    
+
     @Override
     public PersistentLease getSessionLease() {
         PersistentLease sl = sessionLease;
-        if(sl == null) synchronized(this) {
-            if((sl=sessionLease) == null) {
+        if (sl == null) synchronized (this) {
+            if ((sl = sessionLease) == null) {
                 sessionLease = sl = getLeaseClient().maintain()
                         .minTtl(sessionTimeoutSecs)
                         .permanent().start();
             }
         }
-        if(leaseClient == CLOSED) throw new IllegalStateException("client closed");
+        if (leaseClient == CLOSED) {
+            throw new IllegalStateException("client closed");
+        }
         return sl;
     }
-    
+
     public Executor getExecutor() {
         return grpc.getResponseExecutor();
     }
-    
+
     // ------- utilities
 
     protected static <T> Predicate<T> constantPredicate(boolean val) {
         return val ? Predicates.alwaysTrue() : Predicates.alwaysFalse();
     }
-    
+
     protected static boolean contains(String str, String subStr) {
         return str != null && str.contains(subStr);
     }
-    
+
     protected static final class EtcdEventThread extends FastThreadLocalThread {
         public EtcdEventThread(Runnable r) {
             super(r);
         }
     }
-    
+
     // -----
-    
+
     @VisibleForTesting
     MultithreadEventLoopGroup getInternalExecutor() {
         return internalExecutor;
     }
-    
+
 }

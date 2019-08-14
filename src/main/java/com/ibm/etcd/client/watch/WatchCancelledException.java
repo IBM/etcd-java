@@ -23,12 +23,12 @@ import com.ibm.etcd.api.ResponseHeader;
 public class WatchCancelledException extends RuntimeException {
 
     private static final long serialVersionUID = 6922272835138905911L;
-    
+
     protected final ResponseHeader header;
     protected final String reason;
 
     WatchCancelledException(String message, ResponseHeader header, String reason) {
-        super(message==null?reason:(reason==null?message:(message+"; "+reason)));
+        super(message == null ? reason : (reason == null ? message : (message + "; " + reason)));
         this.header = header;
         this.reason = reason;
     }
@@ -36,14 +36,14 @@ public class WatchCancelledException extends RuntimeException {
     WatchCancelledException(ResponseHeader header, String reason) {
         this("Watch was cancelled by the server unexpectedly", header, reason);
     }
-    
+
     /**
      * @return the etcd response header returned with the cancellation response
      */
     public ResponseHeader getHeader() {
         return header;
     }
-    
+
     /**
      * @return the reason for the cancellation, if provided
      */

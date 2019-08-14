@@ -38,7 +38,7 @@ import io.grpc.MethodDescriptor;
 import io.grpc.Status;
 
 public final class EtcdLockClient implements LockClient {
-    
+
     // avoid volatile read on every invocation
     private static final MethodDescriptor<LockRequest,LockResponse> METHOD_LOCK =
             LockGrpc.getLockMethod();
@@ -47,16 +47,16 @@ public final class EtcdLockClient implements LockClient {
 
     protected final EtcdClient etcdClient;
     protected final GrpcClient grpcClient;
-    
+
     public EtcdLockClient(GrpcClient grpcClient, EtcdClient etcdClient) {
         this.grpcClient = grpcClient;
         this.etcdClient = etcdClient;
     }
-    
+
     final class EtcdLockRequest extends AbstractFluentRequest<FluentLockRequest,
         LockRequest,LockResponse,LockRequest.Builder> implements FluentLockRequest {
         PersistentLease lease;
-        
+
         EtcdLockRequest(ByteString name) {
             super(grpcClient, LockRequest.newBuilder().setName(name));
         }
@@ -82,24 +82,28 @@ public final class EtcdLockClient implements LockClient {
 
         @Override
         public final ListenableFuture<LockResponse> async(Executor executor) {
-            if(lease == null) {
-                if(builder.getLease() != 0L) return super.async(executor);
-                else lease = etcdClient.getSessionLease();
+            if (lease == null) {
+                if (builder.getLease() != 0L) {
+                    return super.async(executor);
+                } else {
+                    lease = etcdClient.getSessionLease();
+                }
             }
             long plId = lease.getLeaseId();
-            if(plId != 0L) {
+            if (plId != 0L) {
                 builder.setLease(plId);
                 return super.async(executor);
             }
             ListenableFuture<Long> fut;
-            if(deadline == null) fut = lease;
-            else {
+            if (deadline == null) {
+                fut = lease;
+            } else {
                 long remainingNanos = deadline.timeRemaining(NANOSECONDS);
                 fut = Futures.catching(Futures.withTimeout(lease,
                         remainingNanos, NANOSECONDS, grpcClient.getInternalExecutor()),
                         TimeoutException.class, te -> {
                             throw Status.DEADLINE_EXCEEDED.withCause(te)
-                            .withDescription(String.format("deadline exceeded after %dns",
+                                .withDescription(String.format("deadline exceeded after %dns",
                                     remainingNanos)).asRuntimeException();
                         }, MoreExecutors.directExecutor());
             }
@@ -109,12 +113,12 @@ public final class EtcdLockClient implements LockClient {
             }, executor);
         }
     }
-    
+
     @Override
     public FluentLockRequest lock(ByteString name) {
         return new EtcdLockRequest(name);
     }
-    
+
     final class EtcdUnlockRequest extends AbstractFluentRequest<FluentUnlockRequest,
         UnlockRequest,UnlockResponse,UnlockRequest.Builder> implements FluentUnlockRequest {
 

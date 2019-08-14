@@ -46,16 +46,18 @@ final class EtcdWatchUpdate implements WatchUpdate {
 
     @Override
     public String toString() {
-        return "WatchUpdate[rev="+response.getHeader().getRevision()
-                +",events=["+getEvents().stream().map(e ->
-                "Event[type="+e.getType()+",key="+kvToString(e.getKv())
-                +",modRev="+(e.getKv()!=null?e.getKv().getModRevision():"n/a")
-                +",prevKey="+kvToString(e.getPrevKv())+"]")
-                .collect(Collectors.joining(",")) +"]]";
+        return "WatchUpdate[rev=" + response.getHeader().getRevision()
+                + ",events=[" + getEvents().stream().map(e ->
+                "Event[type=" + e.getType() + ",key=" + kvToString(e.getKv())
+                + ",modRev=" + (e.getKv() != null ? e.getKv().getModRevision() : "n/a")
+                + ",prevKey=" + kvToString(e.getPrevKv()) + "]")
+                .collect(Collectors.joining(",")) + "]]";
     }
-    
+
     private static String kvToString(KeyValue kv) {
-        if(kv == null) return null;
+        if (kv == null) {
+            return null;
+        }
         ByteString key = kv.getKey();
         return key != null ? key.toStringUtf8() : "null";
     }

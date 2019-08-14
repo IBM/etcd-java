@@ -31,40 +31,45 @@ import org.slf4j.LoggerFactory;
  * 
  */
 public class SerializingExecutor implements Executor {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(SerializingExecutor.class);
-    
-	private final Executor sharedPool;
-	private final Queue<Runnable> workQueue;
-	private volatile boolean scheduled = false;
-	
-	public SerializingExecutor(Executor parentPool) {
-	    this(parentPool, 0);
-	}
-	
-	public SerializingExecutor(Executor parentPool, int capacity) {
-        if(parentPool == null) throw new NullPointerException();
+
+    private final Executor sharedPool;
+    private final Queue<Runnable> workQueue;
+    private volatile boolean scheduled = false;
+
+    public SerializingExecutor(Executor parentPool) {
+        this(parentPool, 0);
+    }
+
+    public SerializingExecutor(Executor parentPool, int capacity) {
+        if (parentPool == null) {
+            throw new NullPointerException();
+        }
         this.sharedPool = parentPool;
         this.workQueue = capacity > 0 ? new LinkedBlockingQueue<>(capacity)
                 : new ConcurrentLinkedQueue<>();
     }
-	
-	protected void logTaskUncheckedException(Throwable t) {
-		logger.error("Uncaught task exception: "+t, t);
-	}
-	
-	@SuppressWarnings("serial")
+
+    protected void logTaskUncheckedException(Throwable t) {
+        logger.error("Uncaught task exception: "+t, t);
+    }
+
+    @SuppressWarnings("serial")
     class TaskRun extends ReentrantLock implements Runnable {
-	    @Override public void run() {
+        @Override
+        public void run() {
             try {
-                for(;;) {
+                for (;;) {
                     Queue<Runnable> wq = workQueue;
                     Runnable next;
-                    if((next = wq.poll()) == null) {
+                    if ((next = wq.poll()) == null) {
                         lock();
                         try {
                             scheduled = false;
-                            if((next = wq.poll()) == null) return;
+                            if ((next = wq.poll()) == null) {
+                                return;
+                            }
                             scheduled = true;
                         } finally {
                             unlock();
@@ -72,56 +77,58 @@ public class SerializingExecutor implements Executor {
                     }
                     try {
                         next.run();
-                    } catch(RuntimeException e) {
+                    } catch (RuntimeException e) {
                         logTaskUncheckedException(e);
                     }
                 }
-            } catch(Throwable t) {
+            } catch (Throwable t) {
                 dispatch();
                 logTaskUncheckedException(t);
                 throw t;
             }
         }
-	}
-	
-	private final TaskRun runner = new TaskRun();
-	
-	@Override
-	public void execute(Runnable command) {
-	    if(!workQueue.offer(command)) {
-	        throw new RejectedExecutionException("SerializingExecutor work queue full");
-	    }
-	        
-		if(!scheduled) {
-			boolean doit = false;
-			runner.lock();
-			try {
-				if(!scheduled) {
-					scheduled = true;
-					doit = true;
-				}
-			} finally {
-			    runner.unlock();
-			}
-			if(doit) dispatch();
-		}
-	}
-	
-	private void dispatch() {
-		boolean ok = false;
-		try {
-			sharedPool.execute(runner);
-			ok = true;
-		} finally {
-			if(!ok) {
-			    runner.lock();
-			    try {
-				scheduled = false; // bad situation
-			    } finally {
-			        runner.unlock();
-			    }
-			}
-		}
-	}
+    }
+
+    private final TaskRun runner = new TaskRun();
+
+    @Override
+    public void execute(Runnable command) {
+        if (!workQueue.offer(command)) {
+            throw new RejectedExecutionException("SerializingExecutor work queue full");
+        }
+
+        if (!scheduled) {
+            boolean doit = false;
+            runner.lock();
+            try {
+                if (!scheduled) {
+                    scheduled = true;
+                    doit = true;
+                }
+            } finally {
+                runner.unlock();
+            }
+            if (doit) {
+                dispatch();
+            }
+        }
+    }
+
+    private void dispatch() {
+        boolean ok = false;
+        try {
+            sharedPool.execute(runner);
+            ok = true;
+        } finally {
+            if (!ok) {
+                runner.lock();
+                try {
+                    scheduled = false; // bad situation
+                } finally {
+                    runner.unlock();
+                }
+            }
+        }
+    }
 
 }

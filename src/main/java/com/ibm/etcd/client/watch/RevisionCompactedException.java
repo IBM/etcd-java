@@ -23,14 +23,14 @@ import com.ibm.etcd.api.ResponseHeader;
 public class RevisionCompactedException extends WatchCancelledException {
 
     private static final long serialVersionUID = 3831051484800564889L;
-    
+
     protected final long compactRevision;
 
     RevisionCompactedException(ResponseHeader header, String reason, long compactRevision) {
-        super("Watch revision has been compacted, oldest available is "+compactRevision, header, reason);
+        super("Watch revision has been compacted, oldest available is " + compactRevision, header, reason);
         this.compactRevision = compactRevision;
     }
-    
+
     /**
      * @return oldest available (non-compacted) revision
      */

@@ -39,21 +39,23 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
  * Derived from netty's HexDumpProxy: https://github.com/netty/netty/blob/4.1/example/src/main/java/io/netty/example/proxy/HexDumpProxy.java
  */
 public class LocalNettyProxy implements AutoCloseable {
-    
+
     private final int proxyPort;
-    
+
     private final EventLoopGroup bossGroup = new NioEventLoopGroup(1);
     private final EventLoopGroup workerGroup = new NioEventLoopGroup();
     private final Set<Channel> inboundChannels = ConcurrentHashMap.newKeySet();
-        
+
     private Channel channel;
-    
+
     public LocalNettyProxy(int fromPort) {
         this.proxyPort = fromPort;
     }
-    
+
     public synchronized LocalNettyProxy start() throws InterruptedException {
-        if(channel != null) return this;
+        if (channel != null) {
+            return this;
+        }
         long before = System.nanoTime();
         System.out.println("localproxy about to start on port "+proxyPort);
         ServerBootstrap b = new ServerBootstrap();
@@ -69,13 +71,15 @@ public class LocalNettyProxy implements AutoCloseable {
                 .bind(proxyPort);
         channel = cf.channel();
         cf.sync();
-        System.out.println("localproxy started on port "+proxyPort+" in "+
-                (System.nanoTime()-before)/1000_000+"ms");
+        System.out.println("localproxy started on port " + proxyPort + " in " +
+                (System.nanoTime( )- before) / 1000_000 + "ms");
         return this;
     }
-    
+
     public synchronized void kill() throws InterruptedException {
-        if(channel == null) return;
+        if (channel == null) {
+            return;
+        }
         long before = System.nanoTime();
         System.out.println("localproxy on port "+proxyPort+" about to forcibly stop");
         Channel chan = channel;
@@ -87,8 +91,8 @@ public class LocalNettyProxy implements AutoCloseable {
         channel = null;
         // wait for full closure to ensue we can re-bind in subsequent start()
         closeFut.await();
-        System.out.println("localproxy on port "+proxyPort+" stopped in "+
-                (System.nanoTime()-before)/1000_000+"ms");
+        System.out.println("localproxy on port " + proxyPort + " stopped in " +
+                (System.nanoTime() - before) / 1000_000 + "ms");
     }
 
     static class FrontendHandler extends ChannelInboundHandlerAdapter {
@@ -129,7 +133,9 @@ public class LocalNettyProxy implements AutoCloseable {
         }
         @Override
         public void channelRead(final ChannelHandlerContext ctx, Object msg) {
-            if (outboundChannel.isActive()) forwardMessage(ctx, msg, outboundChannel);
+            if (outboundChannel.isActive()) {
+                forwardMessage(ctx, msg, outboundChannel);
+            }
         }
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
@@ -141,7 +147,7 @@ public class LocalNettyProxy implements AutoCloseable {
             closeOnFlush(ctx.channel());
         }
     }
-    
+
     static class BackendHandler extends ChannelInboundHandlerAdapter {
         private final Channel inboundChannel;
 
@@ -166,7 +172,7 @@ public class LocalNettyProxy implements AutoCloseable {
             closeOnFlush(ctx.channel());
         }
     }
-    
+
     static void forwardMessage(ChannelHandlerContext fromCtx,
             Object msg, Channel toChannel) {
         toChannel.writeAndFlush(msg).addListener((ChannelFutureListener) future -> {
@@ -177,14 +183,14 @@ public class LocalNettyProxy implements AutoCloseable {
             }
         });
     }
-    
+
     /**
      * Closes the specified channel after all queued write requests are flushed.
      */
     static void closeOnFlush(Channel ch) {
         if (ch != null && ch.isActive()) {
             ch.writeAndFlush(Unpooled.EMPTY_BUFFER)
-            .addListener(ChannelFutureListener.CLOSE);
+                .addListener(ChannelFutureListener.CLOSE);
         }
     }
 

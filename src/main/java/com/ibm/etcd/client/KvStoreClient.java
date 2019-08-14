@@ -25,11 +25,11 @@ import com.ibm.etcd.client.lock.LockClient;
 public interface KvStoreClient extends Closeable {
 
     public KvClient getKvClient();
-    
+
     public LeaseClient getLeaseClient();
-    
+
     public LockClient getLockClient();
-    
+
     /**
      * Returns a singular {@link PersistentLease} bound
      * to the life of this client instance. May be lazily
@@ -40,5 +40,5 @@ public interface KvStoreClient extends Closeable {
      * @return the session lease
      */
     public PersistentLease getSessionLease();
-    
+
 }

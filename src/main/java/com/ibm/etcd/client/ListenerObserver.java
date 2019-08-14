@@ -24,17 +24,17 @@ import io.grpc.stub.StreamObserver;
 public interface ListenerObserver<T> extends StreamObserver<T> {
 
     void event(boolean complete, T message, Throwable error);
-    
+
     @Override
     default void onNext(T value) {
         event(false, value, null);
     }
-    
+
     @Override
     default void onCompleted() {
         event(true, null, null);
     }
-    
+
     @Override
     default void onError(Throwable t) {
         event(true, null, t);

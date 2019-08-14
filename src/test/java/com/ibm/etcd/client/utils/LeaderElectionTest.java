@@ -27,10 +27,10 @@ public class LeaderElectionTest {
 
     @Test
     public void basicLeaderElectionTest() throws Exception {
-        
-        try(EtcdClient client1 = EtcdClient.forEndpoint("localhost", 2379)
+
+        try (EtcdClient client1 = EtcdClient.forEndpoint("localhost", 2379)
                 .withPlainText().build()) {
-            
+
             ByteString electionKey = bs("/electiontest");
 
             EtcdLeaderElection observer = new EtcdLeaderElection(client1, electionKey);
@@ -39,32 +39,32 @@ public class LeaderElectionTest {
 
             assertNull(observer.getId());
             assertNull(observer.getLeaderId());
-            
+
             EtcdLeaderElection alice = new EtcdLeaderElection(client1, electionKey, "alice");
             EtcdLeaderElection bob = new EtcdLeaderElection(client1, electionKey, "bob");
             EtcdLeaderElection claire = new EtcdLeaderElection(client1, electionKey, "claire");
 
             bob.start();
-            
+
             Thread.sleep(500L);
-            
+
             assertEquals("bob", bob.getId());
             assertEquals("bob", bob.getLeaderId());
             assertEquals("bob", observer.getLeaderId());
-            
+
             alice.start();
-            
+
             Thread.sleep(500L);
-            
+
             assertEquals("alice", alice.getId());
             assertEquals("bob", observer.getLeaderId());
             assertEquals("bob", bob.getLeaderId());
             assertEquals("bob", alice.getLeaderId());
             assertTrue(bob.isLeader());
             assertFalse(alice.isLeader());
-            
+
             claire.start();
-            
+
             Thread.sleep(500L);
             assertEquals("bob", claire.getLeaderId());
             assertEquals("bob", observer.getLeaderId());
@@ -75,8 +75,8 @@ public class LeaderElectionTest {
             assertFalse(bob.isLeader());
             assertFalse(claire.isLeader());
             assertEquals("alice", claire.getLeaderId());
-            
+
         }
     }
-    
+
 }

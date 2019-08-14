@@ -54,15 +54,15 @@ import com.ibm.etcd.client.EtcdClient;
  * 
  */
 public class EtcdClusterConfig {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(EtcdClusterConfig.class);
-    
+
     public static final int DEFAULT_MAX_MSG_SIZE = 256 * 1024 * 1024; // 256 MiB
-    
+
     //TODO later make this more configurable/narrow; only really needed for getting large ranges
     protected final int maxMessageSize = Integer.getInteger("etcd-java.maxMessageSize",
             DEFAULT_MAX_MSG_SIZE);
-    
+
     public enum TlsMode { TLS, PLAINTEXT, AUTO }
 
     Set<String> endpoints;
@@ -71,43 +71,47 @@ public class EtcdClusterConfig {
     ByteString rootPrefix; // a.k.a namespace
     String composeDeployment;
     ByteSource certificate;
-    
+
     protected EtcdClusterConfig() {}
-    
+
     public ByteString getRootPrefix() {
         return rootPrefix;
     }
-    
+
     public Set<String> getEndpoints() {
         return endpoints;
     }
-    
+
     public EtcdClient getClient() throws IOException, CertificateException {
         return getClient(this);
     }
-    
+
     private EtcdClient newClient() throws IOException, CertificateException {
         List<String> endpointList = new ArrayList<>(endpoints);
         EtcdClient.Builder builder = EtcdClient.forEndpoints(endpointList)
                 .withCredentials(user, password).withImmediateAuth()
                 .withMaxInboundMessageSize(maxMessageSize);
         TlsMode ssl = tlsMode;
-        if(ssl == TlsMode.AUTO || ssl == null) {
+        if (ssl == TlsMode.AUTO || ssl == null) {
             String ep = endpointList.get(0);
             ssl = ep.startsWith("https://")
                     || (!ep.startsWith("http://") && certificate != null)
                     ? TlsMode.TLS : TlsMode.PLAINTEXT;
         }
-        if(ssl == TlsMode.PLAINTEXT) builder.withPlainText();
-        else if(composeDeployment != null) {
+        if (ssl == TlsMode.PLAINTEXT) {
+            builder.withPlainText();
+        } else if (composeDeployment != null) {
             builder.withTrustManager(new ComposeTrustManagerFactory(composeDeployment,
                     composeDeployment, certificate));
+        } else if (certificate != null) {
+            builder.withCaCert(certificate);
         }
-        else if(certificate != null) builder.withCaCert(certificate);
-        if(isShutdown) throw new IllegalStateException("shut  down");
+        if (isShutdown) {
+            throw new IllegalStateException("shutdown");
+        }
         return builder.build();
     }
-    
+
     // mainly for testing
     public static EtcdClusterConfig newSimpleConfig(String endpoints, String rootPrefix) {
         EtcdClusterConfig config = new EtcdClusterConfig();
@@ -115,14 +119,16 @@ public class EtcdClusterConfig {
         config.rootPrefix = bs(rootPrefix);
         return config;
     }
-    
+
     public static EtcdClusterConfig fromProperties(ByteSource source) throws IOException {
         Properties props = new Properties();
-        try(InputStream in = source.openStream()) {
+        try (InputStream in = source.openStream()) {
             props.load(in);
         }
         String epString = props.getProperty("endpoints");
-        if(epString == null) throw new IOException("etcd config must contain endpoints property");
+        if (epString == null) {
+            throw new IOException("etcd config must contain endpoints property");
+        }
         EtcdClusterConfig config = new EtcdClusterConfig();
         config.endpoints = Sets.newHashSet(epString.split(","));
         config.user = bs(props.getProperty("username"));
@@ -130,22 +136,26 @@ public class EtcdClusterConfig {
         config.composeDeployment = props.getProperty("compose_deployment");
         config.rootPrefix = bs(props.getProperty("root_prefix")); // a.k.a namespace
         String tlsMode = props.getProperty("tls_mode");
-        if(tlsMode != null) config.tlsMode = TlsMode.valueOf(tlsMode);
+        if (tlsMode != null) {
+            config.tlsMode = TlsMode.valueOf(tlsMode);
+        }
         String certPath = props.getProperty("certificate_file");
-        if(certPath != null) {
+        if (certPath != null) {
             File certFile = new File(certPath);
-            if(!certFile.exists()) throw new IOException("cant find certificate file: "+certPath);
+            if (!certFile.exists()) {
+                throw new IOException("cant find certificate file: " + certPath);
+            }
             config.certificate = Files.asByteSource(certFile);
         }
         return config;
     }
-    
+
     public static EtcdClusterConfig fromJson(ByteSource source, File dir) throws IOException {
         JsonConfig jsonConfig;
-        try(InputStream in = source.openStream()) {
+        try (InputStream in = source.openStream()) {
             jsonConfig = deserializeJson(in);
         }
-        if(jsonConfig.endpoints == null || jsonConfig.endpoints.trim().isEmpty()) {
+        if (jsonConfig.endpoints == null || jsonConfig.endpoints.trim().isEmpty()) {
             throw new IOException("etcd config must contain endpoints property");
         }
         EtcdClusterConfig config = new EtcdClusterConfig();
@@ -154,40 +164,42 @@ public class EtcdClusterConfig {
         config.password = bs(jsonConfig.password);
         config.composeDeployment = jsonConfig.composeDeployment;
         config.rootPrefix = bs(jsonConfig.rootPrefix);
-        if(jsonConfig.certificateFile != null) {
+        if (jsonConfig.certificateFile != null) {
             File certFile = new File(jsonConfig.certificateFile);
-            if(dir != null && !certFile.exists()) {
+            if (dir != null && !certFile.exists()) {
                 // try same dir as the config file
                 certFile = new File(dir, jsonConfig.certificateFile);
             }
-            if(certFile.exists()) config.certificate = Files.asByteSource(certFile);
-            else {
+            if (certFile.exists()) {
+                config.certificate = Files.asByteSource(certFile);
+            } else {
                 // will fall back to embedded if present
                 logger.warn("cant find certificate file: "+jsonConfig.certificateFile);
             }
         }
-        if(jsonConfig.certificate != null) {
-            if(config.certificate != null) {
+        if (jsonConfig.certificate != null) {
+            if (config.certificate != null) {
                 logger.warn("ignoring json-embedded cert because file was also provided");
+            } else {
+                config.certificate = ByteSource.wrap(jsonConfig.certificate.getBytes(UTF_8));
             }
-            else config.certificate = ByteSource.wrap(jsonConfig.certificate.getBytes(UTF_8));
         }
         return config;
     }
-    
+
     public static EtcdClusterConfig fromJson(ByteSource source) throws IOException {
         return fromJson(source, null);
     }
-    
+
     public static EtcdClusterConfig fromJsonFile(String file) throws IOException {
         File f = new File(file);
         return fromJson(Files.asByteSource(f), f.getParentFile());
     }
-    
+
     protected static final String ADDR_STR = "(?:https?://)?(?:[a-zA-Z0-9\\-.]+)(?::\\d+)?";
     protected static final Pattern SIMPLE_PATT = Pattern.compile(String
             .format("((?:%s)(?:,%s)*)(?:;rootPrefix=(.+))?", ADDR_STR, ADDR_STR));
-    
+
     /**
      * @param fileOrSimpleString path to json config file <b>or</b> simple config of the form
      *     "endpoint1,endpoint2,...;rootPrefix=&lt;prefix&gt;", where ;rootPrefix=&lt;prefix&gt;
@@ -196,28 +208,32 @@ public class EtcdClusterConfig {
      */
     public static EtcdClusterConfig fromJsonFileOrSimple(String fileOrSimpleString) throws IOException {
         File f = new File(fileOrSimpleString);
-        if(f.exists()) return fromJson(Files.asByteSource(f), f.getParentFile());
+        if (f.exists()) {
+            return fromJson(Files.asByteSource(f), f.getParentFile());
+        }
         Matcher m = SIMPLE_PATT.matcher(fileOrSimpleString);
-        if(m.matches()) return EtcdClusterConfig.newSimpleConfig(m.group(1), m.group(2));
-        throw new FileNotFoundException("etcd config json file not found: "+f);
+        if (m.matches()) {
+            return EtcdClusterConfig.newSimpleConfig(m.group(1), m.group(2));
+        }
+        throw new FileNotFoundException("etcd config json file not found: " + f);
     }
-    
+
     private static final Cache<CacheKey,EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
             .<CacheKey,EtcdClient>removalListener(rn -> rn.getValue().close()).build();
-    
+
     public static EtcdClient getClient(EtcdClusterConfig config) throws IOException, CertificateException {
         try {
             return clientCache.get(new CacheKey(config), config::newClient);
-        } catch(ExecutionException ee) {
+        } catch (ExecutionException ee) {
             Throwables.throwIfInstanceOf(ee.getCause(), IOException.class);
             Throwables.throwIfInstanceOf(ee.getCause(), CertificateException.class);
             Throwables.throwIfUnchecked(ee.getCause());
             throw new RuntimeException(ee.getCause());
         }
     }
-    
+
     private static volatile boolean isShutdown = false;
-    
+
     /**
      * Should generally only be called during JVM shutdown
      */
@@ -225,20 +241,22 @@ public class EtcdClusterConfig {
         isShutdown = true;
         clientCache.invalidateAll();
     }
-    
+
     static class CacheKey {
         private final EtcdClusterConfig config;
-        
+
         CacheKey(EtcdClusterConfig config) {
             this.config = Preconditions.checkNotNull(config);
         }
-        
+
         // NOTE: rootPrefix is currently intentionally excluded
         // since it's not used to build the client
         @Override
         public boolean equals(Object obj) {
-            if(!(obj instanceof CacheKey)) return false;
-            EtcdClusterConfig other = ((CacheKey)obj).config;
+            if (!(obj instanceof CacheKey)) {
+                return false;
+            }
+            EtcdClusterConfig other = ((CacheKey) obj).config;
             return Objects.equals(config.endpoints, other.endpoints)
                     && Objects.equals(config.composeDeployment, other.composeDeployment)
                     && Objects.equals(config.user, other.user)
@@ -250,15 +268,15 @@ public class EtcdClusterConfig {
                     config.composeDeployment, config.tlsMode);
         }
     }
-    
+
     // ----  json deserialization
-    
+
     private static final Gson gson = new Gson();
-    
+
     private static JsonConfig deserializeJson(InputStream in) {
         return gson.fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), JsonConfig.class);
     }
-    
+
     static class JsonConfig {
         @SerializedName("endpoints")
         String endpoints;

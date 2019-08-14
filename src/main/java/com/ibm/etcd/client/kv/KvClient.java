@@ -48,12 +48,12 @@ import io.grpc.stub.StreamObserver;
  * KV operations
  */
 public interface KvClient {
-    
+
     /**
      * Used to get, watch or delete <b>all</b> of the keys (use with caution!)
      */
     public static final ByteString ALL_KEYS = ByteString.copyFromUtf8("ALL_KEYS");
-    
+
     /**
      * Needed for backwards binary compatibility
      */
@@ -64,7 +64,7 @@ public interface KvClient {
         @Override FR backoffRetry();
         @Override FR backoffRetry(Condition precondition);
     }
-    
+
     interface FluentRangeRequest extends FluentRequest<FluentRangeRequest,RangeRequest,RangeResponse> {
         FluentRangeRequest rangeEnd(ByteString key);
         FluentRangeRequest asPrefix();
@@ -81,31 +81,31 @@ public interface KvClient {
         FluentRangeRequest minCreateRevision(long rev);
         FluentRangeRequest maxCreateRevision(long rev);
     }
-    
+
     interface FluentDeleteRequest extends FluentRequest<FluentDeleteRequest,DeleteRangeRequest,DeleteRangeResponse> {
         FluentDeleteRequest rangeEnd(ByteString key);
         FluentDeleteRequest asPrefix();
         FluentDeleteRequest andHigher();
         FluentDeleteRequest prevKv();
     }
-    
+
     interface FluentPutRequest extends FluentRequest<FluentPutRequest,PutRequest,PutResponse> {
         FluentPutRequest prevKv();
     }
-    
+
     interface FluentTxnRequest extends FluentRequest<FluentTxnRequest,TxnRequest,TxnResponse> {
         FluentCmpTarget cmpEqual(ByteString key);
         FluentCmpTarget cmpNotEqual(ByteString key);
         FluentCmpTarget cmpLess(ByteString key);
         FluentCmpTarget cmpGreater(ByteString key);
-        
+
         FluentTxnRequest exists(ByteString key);
         FluentTxnRequest notExists(ByteString key);
         default FluentTxnRequest and() { return this; }
-        
+
         FluentTxnSuccOps then();
     }
-    
+
     interface FluentCmpTarget {
         FluentTxnRequest version(long version);
         FluentTxnRequest mod(long rev);
@@ -115,7 +115,7 @@ public interface KvClient {
          * Supported in versions &gt;= 3.3 only
          */
         FluentTxnRequest lease(long leaseId);
-        
+
         /**
          * Supported in versions &gt;= 3.3 only
          */
@@ -129,7 +129,7 @@ public interface KvClient {
          */
         FluentCmpTarget andAllHigher();
     }
-    
+
     @SuppressWarnings("unchecked")
     interface FluentTxnOps<FTO extends FluentTxnOps<FTO>>
         extends FluentRequest<FluentTxnOps<FTO>,TxnRequest,TxnResponse> {
@@ -144,11 +144,11 @@ public interface KvClient {
         default FTO and() { return (FTO)this; }
         default FTO noop() { return (FTO)this; }
     }
-    
+
     interface FluentTxnSuccOps extends FluentTxnOps<FluentTxnSuccOps> {
         FluentTxnOps<?> elseDo();
     }
-    
+
     //TODO
     enum RetryStrategy { BASIC, BACKOFF }
 
@@ -158,21 +158,21 @@ public interface KvClient {
      * @return future for {@link RangeResponse}
      */
     ListenableFuture<RangeResponse> get(RangeRequest request);
-    
-    
+
+
     /**
      * 
      * @param key key to get or {@link #ALL_KEYS} for the entire keyspace
      */
     FluentRangeRequest get(ByteString key);
-    
+
     /**
      * 
      * @param txn
      * @return future for {@link TxnResponse}
      */
     ListenableFuture<TxnResponse> txn(TxnRequest txn);
-    
+
     /**
      * 
      * @param txn
@@ -180,25 +180,25 @@ public interface KvClient {
      * @return {@link TxnResponse}
      */
     TxnResponse txnSync(TxnRequest txn, long timeoutMillis);
-    
+
     /**
      * Start a fluent transaction request
      */
     FluentTxnRequest txnIf();
-    
+
     /**
      * Start a fluent batch transaction request
      */
     FluentTxnOps<?> batch();
-    
-    
+
+
     /**
      * 
      * @param request
      * @return future for {@link PutResponse}
      */
     ListenableFuture<PutResponse> put(PutRequest request);
-    
+
     //TODO maybe combine following two
     /**
      * Put a key/value with no associated lease. If the key already
@@ -209,7 +209,7 @@ public interface KvClient {
      * @param value
      */
     FluentPutRequest put(ByteString key, ByteString value);
-    
+
     /**
      * Put a key/value associated with a lease.
      * 
@@ -218,7 +218,7 @@ public interface KvClient {
      * @param leaseId
      */
     FluentPutRequest put(ByteString key, ByteString value, long leaseId);
-    
+
     /**
      * Associate an existing key/value with a lease.
      * 
@@ -226,7 +226,7 @@ public interface KvClient {
      * @param leaseId
      */
     FluentPutRequest setLease(ByteString key, long leaseId);
-    
+
     /**
      * Put a key/value without affecting its lease association if
      * the key already exists.
@@ -235,23 +235,23 @@ public interface KvClient {
      * @param value
      */
     FluentPutRequest setValue(ByteString key, ByteString value);
-    
-    
+
+
     /**
      * 
      * @param request
      * @return future for {@link DeleteRangeResponse}
      */
     ListenableFuture<DeleteRangeResponse> delete(DeleteRangeRequest request);
-    
+
     /**
      * Start a fluent delete request
      * 
      * @param key key to delete or {@link #ALL_KEYS} to delete <b>everything</b>
      */
     FluentDeleteRequest delete(ByteString key);
-    
-    
+
+
     interface FluentWatchRequest {
         FluentWatchRequest filters(List<FilterType> filters);
         FluentWatchRequest filters(FilterType... filters);
@@ -262,7 +262,7 @@ public interface KvClient {
         FluentWatchRequest progressNotify();
         FluentWatchRequest startRevision(long rev);
         FluentWatchRequest executor(Executor executor);
-        
+
         /**
          * Start an asynchronous listener-based watch
          */
@@ -272,7 +272,7 @@ public interface KvClient {
          */
         WatchIterator start();
     }
-    
+
     /**
      * Call {@link #close()} at any time to cancel the watch. The future will complete
      * with TRUE when the watch is established, FALSE if it was cancelled prior
@@ -283,7 +283,7 @@ public interface KvClient {
         @Override
         public void close(); // doesn't throw
     }
-    
+
     /**
      * Call {@link #close()} at any time to cancel the watch. Failure of the watch will
      * result in {@link #next()} throwing the corresponding exception after first
@@ -297,7 +297,7 @@ public interface KvClient {
         @Override
         public void close(); // doesn't throw
     }
-    
+
     /**
      * Watch watches on a key or prefix. The watched updates will be notified via onWatch.
      * Updates may or may not include a list of events - if the provided list is null the
@@ -312,14 +312,14 @@ public interface KvClient {
      * @param updates watch update stream
      * @return Watch watch reference
      */
-      Watch watch(WatchCreateRequest request, StreamObserver<WatchUpdate> updates);
-      
-      /**
-       * Start a fluent watch request
-       * 
-       * @see #watch(WatchCreateRequest, StreamObserver)
-       * @param key key to watch or {@link #ALL_KEYS} to watch the entire keyspace
-       */
-      FluentWatchRequest watch(ByteString key);
-    
+    Watch watch(WatchCreateRequest request, StreamObserver<WatchUpdate> updates);
+
+    /**
+     * Start a fluent watch request
+     * 
+     * @see #watch(WatchCreateRequest, StreamObserver)
+     * @param key key to watch or {@link #ALL_KEYS} to watch the entire keyspace
+     */
+    FluentWatchRequest watch(ByteString key);
+
 }

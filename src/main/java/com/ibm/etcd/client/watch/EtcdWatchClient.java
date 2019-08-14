@@ -53,24 +53,24 @@ import io.grpc.stub.StreamObserver;
  * 
  */
 public final class EtcdWatchClient implements Closeable {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(EtcdWatchClient.class);
-    
+
     private static final Exception CANCEL_EXCEPTION = new CancellationException();
-    
+
     private static final String UNAUTH_REASON_PREFIX = "rpc error: code = PermissionDenied";
-    
+
     private static final MethodDescriptor<WatchRequest,WatchResponse> METHOD_WATCH =
             WatchGrpc.getWatchMethod();
-    
-    
+
+
     /* Watcher states:
      *   - in pendingCreate only, watchId < 0, finished == false
      *   - in activeWatchers only, watchId >= 0, finished == false
      *          (stream completion event published in this transition)
      *   - in neither, watchId < 0, finished == true
      */
-    
+
     private final GrpcClient client;
     private final Executor observerExecutor; // "parent" executor
     private final Executor eventLoop; // serialized
@@ -80,21 +80,21 @@ public final class EtcdWatchClient implements Closeable {
 
     // additions done only in "this" lock, removals done only in eventLoop
     private final Queue<WatcherRecord> pendingCreate = new ConcurrentLinkedQueue<>();
-    
+
     @GuardedBy("eventLoop")
     private final Map<Long,WatcherRecord> activeWatchers = new HashMap<>();
-    
-    
+
+
     public EtcdWatchClient(GrpcClient client) {
         this(client, client.getResponseExecutor());
     }
-    
+
     public EtcdWatchClient(GrpcClient client, Executor executor) {
         this.client = client;
         this.observerExecutor = executor != null ? executor : client.getResponseExecutor();
         this.eventLoop = GrpcClient.serialized(client.getInternalExecutor());
     }
-    
+
     /**
      * Internal per-watch state
      */
@@ -105,7 +105,7 @@ public final class EtcdWatchClient implements Closeable {
         private final Executor watcherExecutor;
 
         private WatchHandle creationFuture;
-        
+
         long upToRevision;
         long watchId = -2L; // -2 only pre-creation, >= -1 after
         boolean userCancelled, finished;
@@ -127,29 +127,37 @@ public final class EtcdWatchClient implements Closeable {
             watcherExecutor.execute(() -> {
                 completeCreateFuture(false, err);
                 try {
-                    if(err == null || vUserCancelled) observer.onCompleted();
-                    else observer.onError(err);
-                } catch(RuntimeException e) {
-                    logger.warn("Watch "+watchId
-                            +" observer onCompleted/onError threw", e);
+                    if (err == null || vUserCancelled) {
+                        observer.onCompleted();
+                    } else {
+                        observer.onError(err);
+                    }
+                } catch (RuntimeException e) {
+                    logger.warn("Watch " + watchId
+                            + " observer onCompleted/onError threw", e);
                 }
             });
         }
 
         @GuardedBy("eventLoop")
         public void processWatchEvents(final WatchResponse wr) {
-            if(userCancelled) return; // suppress events if cancelled
+            if (userCancelled) {
+                return; // suppress events if cancelled
+            }
             int eventsCount = wr.getEventsCount();
             final long newRevision = eventsCount <= 0 ? wr.getHeader().getRevision() - 1
-                    : wr.getEvents(eventsCount-1).getKv().getModRevision();
-            if(newRevision <= upToRevision) return;
+                    : wr.getEvents(eventsCount - 1).getKv().getModRevision();
+            if (newRevision <= upToRevision) {
+                return;
+            }
             watcherExecutor.execute(() -> {
                 try {
-//                  if(first) observer.onNext(new WatchUpdate(wr.getHeader(),
-//                          null, null, EventType.ESTABLISHED));
-                    if(vUserCancelled) return;
-                    observer.onNext(new EtcdWatchUpdate(wr));
-                } catch(RuntimeException e) {
+                    //                  if (first) observer.onNext(new WatchUpdate(wr.getHeader(),
+                    //                          null, null, EventType.ESTABLISHED));
+                    if (!vUserCancelled) {
+                        observer.onNext(new EtcdWatchUpdate(wr));
+                    }
+                } catch (RuntimeException e) {
                     logger.warn("Watch observer onNext() threw", e);
 
                     // must cancel the watch here per StreamObserver contract
@@ -160,44 +168,48 @@ public final class EtcdWatchClient implements Closeable {
             });
             upToRevision = newRevision;
         }
-        
+
         // returns true if addition to activeWatchers was made
         @GuardedBy("eventLoop")
         public boolean processCreatedResponse(WatchResponse wr, boolean cancelled) {
             long newWatchId = wr.getWatchId();
-            if(cancelled || newWatchId == -1L) {
+            if (cancelled || newWatchId == -1L) {
                 String reason = wr.getCancelReason();
-                if(reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)) {
+                if (reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)) {
                     // If watch creation fails due to an authentication issue (likely
                     // expired), we trigger a reauth+refresh of the stream by sending
                     // an UNAUTHENTICATED error. This watch must first be re-created
                     // so that it will be retried properly in our onRefresh method.
-                    synchronized(EtcdWatchClient.this) {
+                    synchronized (EtcdWatchClient.this) {
                         boolean notClosed = createNewWatch(this);
-                        if(notClosed) {
+                        if (notClosed) {
                             StreamObserver<WatchRequest> reqStream = getRequestStream();
-                            if(reqStream != null) reqStream.onError(Code.UNAUTHENTICATED
+                            if (reqStream != null) {
+                                reqStream.onError(Code.UNAUTHENTICATED
                                     .toStatus().withDescription(reason).asException());
+                            }
                         }
                     }
+                } else {
+                    processCancelledResponse(wr);
                 }
-                else processCancelledResponse(wr);
             } else {
                 boolean first = this.watchId < 0, veryFirst = this.watchId == -2;
                 this.watchId = newWatchId;
-                if(activeWatchers.putIfAbsent(newWatchId, this) == null) {
-                    if(userCancelled) sendCancel(watchId);
-                    else {
-                        if(veryFirst) {
+                if (activeWatchers.putIfAbsent(newWatchId, this) == null) {
+                    if (userCancelled) {
+                        sendCancel(watchId);
+                    } else {
+                        if (veryFirst) {
                             watcherExecutor.execute(() -> completeCreateFuture(true, null));
                         }
-                        if(!first || wr.getEventsCount() > 0) {
+                        if (!first || wr.getEventsCount() > 0) {
                             processWatchEvents(wr);
                         }
                         return true;
                     }
                 } else {
-                    logger.error("State error: watchId conflict: "+watchId);
+                    logger.error("State error: watchId conflict: " + watchId);
                     //TODO cancel existing watch here?
                 }
             }
@@ -207,21 +219,26 @@ public final class EtcdWatchClient implements Closeable {
         @GuardedBy("eventLoop")
         public void processCancelledResponse(WatchResponse wr) {
             watchId = -1L;
-            if(finished) {
+            if (finished) {
                 logger.warn("Ignoring unexpected cancel response for watch "
-                        +wr.getWatchId()+", reason="+wr.getCancelReason());
+                        + wr.getWatchId() + ", reason=" + wr.getCancelReason());
                 return;
             }
             finished = true;
             Exception error;
-            if(userCancelled) error = null;
-            else {
+            if (userCancelled) {
+                error = null;
+            } else {
                 ResponseHeader header = wr.getHeader();
                 long cRev = wr.getCompactRevision();
                 String reason = wr.getCancelReason();
-                if(cRev != 0) error = new RevisionCompactedException(header, reason, cRev);
-                else if(wr.getCreated()) error = new WatchCreateException(header, reason);
-                else error = new WatchCancelledException(header, reason);
+                if (cRev != 0) {
+                    error = new RevisionCompactedException(header, reason, cRev);
+                } else if (wr.getCreated()) {
+                    error = new WatchCreateException(header, reason);
+                } else {
+                    error = new WatchCancelledException(header, reason);
+                }
             }
             publishCompletionEvent(error);
         }
@@ -230,48 +247,58 @@ public final class EtcdWatchClient implements Closeable {
         public WatchRequest newCreateWatchRequest() {
             return WatchRequest.newBuilder()
                     .setCreateRequest(request.toBuilder()
-                            .setStartRevision(upToRevision +1)).build();
+                            .setStartRevision(upToRevision + 1)).build();
         }
-        
+
         public WatchRequest firstCreateWatchRequest() {
             return WatchRequest.newBuilder()
                     .setCreateRequest(request).build();
         }
-        
+
         // NOT guarded - called by user or watcherExecutor
         public void cancel() {
-            if(closed || finished || userCancelled) return;
+            if (closed || finished || userCancelled) {
+                return;
+            }
             eventLoop.execute(() -> {
-                    if(closed || userCancelled || finished) return;
-                    sendCancel(watchId);
-                    vUserCancelled = userCancelled = true;
+                if (closed || userCancelled || finished) {
+                    return;
+                }
+                sendCancel(watchId);
+                vUserCancelled = userCancelled = true;
             });
         }
-        
+
         private void completeCreateFuture(boolean created, Exception error) {
             WatchHandle wh = creationFuture;
-            if(wh == null) return;
-            wh.complete(created, error);
-            creationFuture = null;
+            if (wh != null) {
+                wh.complete(created, error);
+                creationFuture = null;
+            }
         }
     }
-    
-//    @Override
+
+//  @Override
     public Watch watch(WatchCreateRequest createReq, StreamObserver<WatchUpdate> observer) {
         return watch(createReq, observer, null);
     }
-    
+
     public Watch watch(WatchCreateRequest createReq,
             StreamObserver<WatchUpdate> observer, Executor executor) {
-        if(closed) throw new IllegalStateException("closed");
+        if (closed) {
+            throw new IllegalStateException("closed");
+        }
         final WatcherRecord wrec = new WatcherRecord(createReq,
                 observer, executor != null ? executor : observerExecutor);
         WatchHandle handle = new WatchHandle(wrec);
+        wrec.creationFuture = handle;
         boolean succ = createNewWatch(wrec);
-        if(!succ) throw new IllegalStateException("closed");
+        if (!succ) {
+            throw new IllegalStateException("closed");
+        }
         return handle;
     }
-    
+
     /**
      * Blocking watch
      */
@@ -280,86 +307,97 @@ public final class EtcdWatchClient implements Closeable {
         Watch handle = watch(createReq, watchIt, MoreExecutors.directExecutor());
         return watchIt.setWatch(handle);
     }
-    
+
     //TODO probably change to have a request thread instead
     private boolean createNewWatch(WatcherRecord wrec) {
         WatchRequest createReq = wrec.firstCreateWatchRequest();
-        synchronized(this) {
+        synchronized (this) {
             StreamObserver<WatchRequest> reqStream = getRequestStream();
-            if(reqStream == null) return false;
+            if (reqStream == null) {
+                return false;
+            }
             pendingCreate.add(wrec);
             reqStream.onNext(createReq);
         }
         return true;
     }
-    
+
     final static class WatchHandle extends AbstractFuture<Boolean> implements Watch {
         private final WeakReference<WatcherRecord> wrecRef;
-        
+
         public WatchHandle(WatcherRecord wrec) {
             wrecRef = new WeakReference<>(wrec);
-            wrec.creationFuture = this;
         }
-        
+
         @Override
         public void close() {
             WatcherRecord wrec = wrecRef.get();
-            if(wrec != null) wrec.cancel();
+            if (wrec != null) {
+                wrec.cancel();
+            }
         }
-        
+
         @Override
         protected void interruptTask() {
             close();
         }
-        
+
         void complete(boolean created, Exception error) {
-            if(error != null) setException(error);
-            else set(created);
+            if (error != null) {
+                setException(error);
+            } else {
+                set(created);
+            }
         }
     }
-    
+
     @GuardedBy("eventLoop")
     protected void sendCancel(long watchId) {
-        if(watchId < 0) return; // not created yet
+        if (watchId < 0) {
+            return; // not created yet
+        }
         // send cancel request
         WatchRequest cancelReq = WatchRequest.newBuilder()
                 .setCancelRequest(WatchCancelRequest.newBuilder()
                         .setWatchId(watchId).build()).build();
-        synchronized(this) {
+        synchronized (this) {
             // don't need to re-initialize reqstream if null (watch can't exist)
             StreamObserver<WatchRequest> reqStream = closed ? null : requestStream;
-            if(reqStream != null) {
+            if (reqStream != null) {
                 reqStream.onNext(cancelReq);
             }
         }
     }
-    
+
     /**
      * get current watch request stream if exists, otherwise establish new one
      */
     @GuardedBy("this")
     protected StreamObserver<WatchRequest> getRequestStream() {
-        if(closed) return null;
-        if(requestStream == null) {
+        if (closed) {
+            return null;
+        }
+        if (requestStream == null) {
             logger.debug("watch stream starting");
             requestStream = client.callStream(METHOD_WATCH, responseObserver, eventLoop);
         }
         return requestStream;
     }
-    
+
     @GuardedBy("eventLoop")
     protected void closeRequestStreamIfNoWatches() {
-        synchronized(this) {
-            if(requestStream == null || !activeWatchers.isEmpty() || !pendingCreate.isEmpty()) return;
-            //TODO probably later change to use ClientCallStreamObserver.cancel()
-            requestStream.onError(CANCEL_EXCEPTION);
-            logger.debug("watch stream cancelled due to there being no active watches");
-            requestStream = null;
+        synchronized (this) {
+            if (requestStream != null && activeWatchers.isEmpty() && pendingCreate.isEmpty()) {
+                //TODO probably later change to use ClientCallStreamObserver.cancel()
+                requestStream.onError(CANCEL_EXCEPTION);
+                logger.debug("watch stream cancelled due to there being no active watches");
+                requestStream = null;
+            }
         }
     }
-    
+
     protected final ResilientResponseObserver<WatchRequest,WatchResponse> responseObserver
-    = new ResilientResponseObserver<WatchRequest,WatchResponse>() {
+      = new ResilientResponseObserver<WatchRequest,WatchResponse>() {
         // all methods @GuardedBy("eventLoop")
         @Override
         public void onEstablished() {
@@ -372,8 +410,10 @@ public final class EtcdWatchClient implements Closeable {
         }
         @Override
         public void onReplaced(StreamObserver<WatchRequest> newStreamRequestObserver) {
-            if(!closed) logger.info("onReplaced called for watch request stream"
-                    +(newStreamRequestObserver==null?" with newReqStream == null":""));
+            if (!closed) {
+                logger.info("onReplaced called for watch request stream"
+                        + (newStreamRequestObserver == null ? " with newReqStream == null" : ""));
+            }
             onReplacedOrFailed(newStreamRequestObserver, null);
         }
         @Override
@@ -384,54 +424,65 @@ public final class EtcdWatchClient implements Closeable {
         @Override
         public void onError(Throwable t) {
             logger.debug("onError called for watch request stream", t);
-            if(closed || GrpcClient.causedBy(t, CancellationException.class)) return;
-            synchronized(EtcdWatchClient.this) {
-                if(closed) return;
+            if (closed || GrpcClient.causedBy(t, CancellationException.class)) {
+                return;
+            }
+            synchronized (EtcdWatchClient.this) {
+                if (closed) {
+                    return;
+                }
             }
             logger.warn("Unexpected fatal watch stream error", t);
             // this will cancel/complete all open user watches -
             // complete their futures exceptionally if not started,
             // and send a final onError to their stream observers
             onReplacedOrFailed(null, t instanceof Exception
-                    ? (Exception)t : new RuntimeException(t));
+                    ? (Exception) t : new RuntimeException(t));
         }
         void onReplacedOrFailed(StreamObserver<WatchRequest> newRequestStream, Exception err) {
             List<WatcherRecord> pending = null;
-            synchronized(EtcdWatchClient.this) {
+            synchronized (EtcdWatchClient.this) {
                 requestStream = newRequestStream;
-                if(!activeWatchers.isEmpty() || !pendingCreate.isEmpty()) {
+                if (!activeWatchers.isEmpty() || !pendingCreate.isEmpty()) {
                     pending = new ArrayList<>(pendingCreate);
                     pending.addAll(activeWatchers.values());
                     pendingCreate.clear();
                     activeWatchers.clear();
                 }
             }
-            
+
             boolean watchesExist = false;
             // recreate all the non-cancelled watches
-            if(pending != null) for(WatcherRecord wrec : pending) {
-                if(wrec.finished) continue;
-                if(wrec.watchId >= 0) wrec.watchId = -1L;
+            if (pending != null) for (WatcherRecord wrec : pending) {
+                if (wrec.finished) {
+                    continue;
+                }
+                if (wrec.watchId >= 0) {
+                    wrec.watchId = -1L;
+                }
                 boolean cancelled = wrec.userCancelled || closed || newRequestStream == null;
-                if(!cancelled) {
+                if (!cancelled) {
                     WatchRequest createReq = wrec.newCreateWatchRequest();
-                    synchronized(EtcdWatchClient.this) {
-                        if(closed) cancelled = true; // (client closed)
-                        else {
+                    synchronized (EtcdWatchClient.this) {
+                        if (closed) {
+                            cancelled = true; // (client closed)
+                        } else {
                             pendingCreate.add(wrec);
                             newRequestStream.onNext(createReq);
                             watchesExist = true;
                         }
                     }
                 }
-                if(cancelled) {
+                if (cancelled) {
                     wrec.vUserCancelled = wrec.userCancelled = true;
                     wrec.finished = true;
                     // err is null here in normal cancellation case
                     wrec.publishCompletionEvent(err);
                 }
             }
-            if(!watchesExist) closeRequestStreamIfNoWatches();
+            if (!watchesExist) {
+                closeRequestStreamIfNoWatches();
+            }
         }
     };
 
@@ -441,50 +492,54 @@ public final class EtcdWatchClient implements Closeable {
         long watchId = wr.getWatchId();
         boolean watchCountReduced = false;
         WatcherRecord wrec;
-        if(wr.getCreated()) {
-            if(logger.isDebugEnabled()) {
-                logger.debug("watch create response received for id "+watchId);
+        if (wr.getCreated()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("watch create response received for id " + watchId);
             }
             wrec = pendingCreate.poll();
-            if(wrec == null) {
-                logger.error("State error: received unexpected watch create response: "+wr);
+            if (wrec == null) {
+                logger.error("State error: received unexpected watch create response: " + wr);
                 sendCancel(wr.getWatchId()); // or maybe close/refresh stream
                 //throw new IllegalStateException("unexpected watch create response");
                 return;
             }
             watchCountReduced = !wrec.processCreatedResponse(wr, cancelled);
-        } else if(cancelled) {
+        } else if (cancelled) {
             wrec = activeWatchers.remove(watchId);
             watchCountReduced = true;
-            if(wrec != null) {
+            if (wrec != null) {
                 //TODO try to resume on "unexpected" cancellations?
                 wrec.processCancelledResponse(wr);
             }
         } else {
             wrec = activeWatchers.get(watchId);
-            if(wrec != null) {
+            if (wrec != null) {
                 wrec.processWatchEvents(wr);
             } else {
-                logger.warn("State error: received response for unrecognized watcher: "+watchId);
+                logger.warn("State error: received response for unrecognized watcher: " + watchId);
                 sendCancel(watchId); // or maybe close/refresh stream
             }
         }
-        if(watchCountReduced && activeWatchers.isEmpty() && pendingCreate.isEmpty()) {
+        if (watchCountReduced && activeWatchers.isEmpty() && pendingCreate.isEmpty()) {
             closeRequestStreamIfNoWatches();
         }
     }
-    
+
     @GuardedBy("this") // but lazy-read from other contexts
     protected boolean closed;
-    
+
     @Override
     public void close() {
-        if(closed) return;
+        if (closed) {
+            return;
+        }
         eventLoop.execute(() -> {
-            if(!closed) synchronized(EtcdWatchClient.this) {
-                if(closed) return;
+            if (!closed) synchronized (EtcdWatchClient.this) {
+                if (closed) {
+                    return;
+                }
                 closed = true;
-                if(requestStream != null) {
+                if (requestStream != null) {
                     //TODO probably later change to use ClientCallStreamObserver.cancel()
                     requestStream.onError(CANCEL_EXCEPTION);
                     requestStream = null;

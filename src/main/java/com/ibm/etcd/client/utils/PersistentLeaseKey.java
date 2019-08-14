@@ -57,18 +57,18 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     private final EtcdClient client;
     protected final ByteString key;
     protected final ListenerObserver<LeaseState> stateObserver;
-    
+
     private final RangeCache rangeCache; // optional
-    
+
     private PersistentLease lease; // final post-start
     private Executor executor; // serialized, final post-start
-    
+
     private volatile ByteString defaultValue;
-    
+
     // these only modified in serialized context
     protected ListenableFuture<?> updateFuture;
     protected SettableFuture<Object> closeFuture; // non-null => closing or closed
-    
+
     /**
      * 
      * @param client
@@ -87,20 +87,21 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         this.defaultValue = defaultValue;
         this.stateObserver = this::leaseStateChanged;
     }
-    
+
     protected void leaseStateChanged(boolean c, LeaseState newState, Throwable t) {
         executor.execute(() -> {
-            if(newState == LeaseState.ACTIVE) putKey(lease.getLeaseId());
-            else if(newState == LeaseState.EXPIRED && rangeCache != null) {
+            if (newState == LeaseState.ACTIVE) {
+                putKey(lease.getLeaseId());
+            } else if (newState == LeaseState.EXPIRED && rangeCache != null) {
                 rangeCache.offerExpiry(key);
             }
         });
     }
-    
+
     protected boolean isActive() {
         return lease != null && lease.getState() == LeaseState.ACTIVE;
     }
-    
+
     /**
      * Create a {@link PersistentLeaseKey} associated with the provided
      * client's session lease.
@@ -114,16 +115,22 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
             ByteString key, ByteString defaultValue, RangeCache rangeCache) {
         this(client, client.getSessionLease(), key, defaultValue, rangeCache);
     }
-    
+
     public synchronized void start() {
-        if(executor != null) throw new IllegalStateException("already started");
-        if(closeFuture != null) throw new IllegalStateException("closed");
+        if (executor != null) {
+            throw new IllegalStateException("already started");
+        }
+        if (closeFuture != null) {
+            throw new IllegalStateException("closed");
+        }
         //TODO TBD or have lease expose its response executor
         executor = GrpcClient.serialized(client.getExecutor());
-        if(lease == null) lease = client.getSessionLease();
+        if (lease == null) {
+            lease = client.getSessionLease();
+        }
         lease.addStateObserver(stateObserver, true);
     }
-    
+
     /**
      * @return a future completed when the key is created and associated with the lease
      */
@@ -131,7 +138,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         start();
         return this;
     }
-    
+
     /**
      * Sets value to use if keyvalue has to be recreated, value of key on
      * server isn't otherwise changed
@@ -141,16 +148,18 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     public void setDefaultValue(ByteString value) {
         this.defaultValue = value;
     }
-    
+
     // called only from our serialized executor context
     protected void putKey(long leaseId) {
-        if(leaseId == 0L || closeFuture != null) return;
-        if(updateFuture != null && !updateFuture.isDone()) {
+        if (leaseId == 0L || closeFuture != null) {
+            return;
+        }
+        if (updateFuture != null && !updateFuture.isDone()) {
             // if the cancellation wins then putKey will be immediately retried
             updateFuture.cancel(false);
             return;
         }
-        
+
         // execute a transaction which either sets the lease on an existing key
         // or creates the key with the lease if it doesn't exist
         PutRequest.Builder putBld = PutRequest.newBuilder().setKey(key).setLease(leaseId);
@@ -158,7 +167,7 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
                 .backoffRetry(() -> closeFuture == null && isActive());
         ListenableFuture<?> fut;
         ListenableFuture<TxnResponse> txnFut;
-        if(rangeCache == null) {
+        if (rangeCache == null) {
             fut = txnFut = req.then().put(putBld.setIgnoreValue(true))
                     .elseDo().put(putBld.setIgnoreValue(false).setValue(defaultValue))
                     .async();
@@ -171,16 +180,20 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
                     tr -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false),
                     directExecutor());
         }
-        if(!isDone()) fut = Futures.transform(fut, r -> set(key), directExecutor());
+        if (!isDone()) {
+            fut = Futures.transform(fut, r -> set(key), directExecutor());
+        }
         // this callback is to trigger an immediate retry in case the attempt was cancelled by a more
         // recent lease state change to active
         Futures.addCallback(fut, (FutureListener<Object>) (v,t) -> {
-            if(t instanceof CancellationException && isActive()) putKey(leaseId);
+            if (t instanceof CancellationException && isActive()) {
+                putKey(leaseId);
+            }
         }, executor);
-        
+
         updateFuture = fut;
     }
-    
+
     @Override
     protected void interruptTask() {
         close();
@@ -199,27 +212,35 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
      */
     public ListenableFuture<?> closeWithFuture() {
         boolean notStarted = false;
-        synchronized(this) {
-            if(closeFuture != null) return closeFuture;
+        synchronized (this) {
+            if (closeFuture != null) {
+                return closeFuture;
+            }
             closeFuture = SettableFuture.create();
-            if(executor == null) notStarted = true;
-            else {
+            if (executor == null) {
+                notStarted = true;
+            } else {
                 lease.removeStateObserver(stateObserver);
                 executor.execute(() -> {
-                    if(updateFuture == null || updateFuture.isDone()) deleteKey();
-                    else updateFuture.addListener(this::deleteKey, executor);
+                    if (updateFuture == null || updateFuture.isDone()) {
+                        deleteKey();
+                    } else {
+                        updateFuture.addListener(this::deleteKey, executor);
+                    }
                 });
             }
         }
         // do these outside sync block since they may call other listeners
         setException(new CancellationException("closed"));
-        if(notStarted) closeFuture.set(null);
+        if (notStarted) {
+            closeFuture.set(null);
+        }
         return closeFuture;
     }
-    
+
     private void deleteKey() {
         client.getKvClient().delete(key)
-        .backoffRetry(() -> lease.getState() != LeaseState.CLOSED).async()
-        .addListener(() -> closeFuture.set(null), directExecutor());
+            .backoffRetry(() -> lease.getState() != LeaseState.CLOSED).async()
+            .addListener(() -> closeFuture.set(null), directExecutor());
     }
 }

@@ -33,7 +33,7 @@ import io.grpc.stub.StreamObserver;
  * Converts async observer-based watch to sync iterator-based watch
  */
 final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpdate> {
-    
+
     static class CompletedUpdate implements WatchUpdate {
         final RuntimeException error;
         @Override public ResponseHeader getHeader() { return null; }
@@ -46,20 +46,20 @@ final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpda
 
     final BlockingQueue<WatchUpdate> updateQueue = new LinkedBlockingQueue<>();
     Watch watch;
-    
+
     CompletedUpdate complete;
-    
+
     EtcdWatchIterator setWatch(Watch watch) {
         this.watch = watch;
         return this;
     }
-    
+
     @Override
     public boolean hasNext() {
-        if(complete == null) {
+        if (complete == null) {
             WatchUpdate wu = updateQueue.peek();
-            if(!(wu instanceof CompletedUpdate) // includes null
-                    || ((CompletedUpdate)wu).error != null) {
+            if (!(wu instanceof CompletedUpdate) // includes null
+                    || ((CompletedUpdate) wu).error != null) {
                 return true;
             }
             updateQueue.remove();
@@ -70,12 +70,16 @@ final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpda
 
     @Override
     public WatchUpdate next() {
-        if(complete == null) try {
+        if (complete == null) try {
             WatchUpdate wu = updateQueue.take();
-            if(!(wu instanceof CompletedUpdate)) return wu;
+            if (!(wu instanceof CompletedUpdate)) {
+                return wu;
+            }
             complete = (CompletedUpdate) wu;
-            if(complete.error == null) return complete;
-        } catch(InterruptedException ie) {
+            if (complete.error == null) {
+                return complete;
+            }
+        } catch (InterruptedException ie) {
             throw new RuntimeException(ie);
         }
         throw complete.error != null ? complete.error
@@ -84,7 +88,9 @@ final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpda
 
     @Override
     public void close() {
-        if(watch == null) throw new IllegalStateException();
+        if (watch == null) {
+            throw new IllegalStateException();
+        }
         watch.close();
     }
 
@@ -96,7 +102,7 @@ final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpda
     public void onError(Throwable t) {
         RuntimeException err = t instanceof RuntimeException
                 ? (RuntimeException) t : new RuntimeException(t);
-        updateQueue.add(new CompletedUpdate(err));
+                updateQueue.add(new CompletedUpdate(err));
     }
     @Override
     public void onCompleted() {

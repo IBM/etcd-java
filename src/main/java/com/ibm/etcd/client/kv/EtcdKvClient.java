@@ -58,7 +58,7 @@ import io.grpc.MethodDescriptor;
 import io.grpc.stub.StreamObserver;
 
 public final class EtcdKvClient implements KvClient {
-    
+
     // avoid volatile read on every invocation
     private static final MethodDescriptor<RangeRequest,RangeResponse> METHOD_RANGE =
             KVGrpc.getRangeMethod();
@@ -68,18 +68,18 @@ public final class EtcdKvClient implements KvClient {
             KVGrpc.getPutMethod();
     private static final MethodDescriptor<DeleteRangeRequest,DeleteRangeResponse> METHOD_DELETE_RANGE =
             KVGrpc.getDeleteRangeMethod();
-    
+
     protected final GrpcClient client;
-    
+
     public EtcdKvClient(GrpcClient client) {
         this.client = client;
     }
-    
+
     @Override
     public ListenableFuture<RangeResponse> get(RangeRequest request) {
         return client.call(METHOD_RANGE, request, true);
     }
-    
+
     @Override
     public FluentRangeRequest get(ByteString key) {
         return new EtcdRangeRequest(key);
@@ -89,17 +89,17 @@ public final class EtcdKvClient implements KvClient {
     private static Predicate<TxnRequest> IDEMPOTENT_TXN = txn ->
         Iterables.all(Iterables.concat(txn.getSuccessList(),txn.getFailureList()), op ->
             op.getRequestCase() == RequestCase.REQUEST_RANGE);
-    
+
     @Override
     public ListenableFuture<TxnResponse> txn(TxnRequest txn) {
         return client.call(METHOD_TXN, txn, false); //IDEMPOTENT_TXN);
     }
-    
+
     @Override
     public FluentTxnRequest txnIf() {
         return new EtcdTxnRequest();
     }
-    
+
     @Override
     public FluentTxnOps<?> batch() {
         return txnIf().then();
@@ -109,27 +109,27 @@ public final class EtcdKvClient implements KvClient {
     public TxnResponse txnSync(TxnRequest txn, long timeoutMillis) {
         return waitFor(ex -> client.call(METHOD_TXN, txn, false, timeoutMillis, ex));
     }
-    
+
     @Override
     public ListenableFuture<PutResponse> put(PutRequest request) {
         return client.call(METHOD_PUT, request, false);
     }
-    
+
     @Override
     public FluentPutRequest put(ByteString key, ByteString value) {
         return new EtcdPutRequest(key, value, false);
     }
-    
+
     @Override
     public FluentPutRequest put(ByteString key, ByteString value, long leaseId) {
         return new EtcdPutRequest(key, value, leaseId);
     }
-    
+
     @Override
     public FluentPutRequest setLease(ByteString key, long leaseId) {
         return new EtcdPutRequest(key, leaseId);
     }
-    
+
     @Override
     public FluentPutRequest setValue(ByteString key, ByteString value) {
         return new EtcdPutRequest(key, value, true);
@@ -139,7 +139,7 @@ public final class EtcdKvClient implements KvClient {
     public ListenableFuture<DeleteRangeResponse> delete(DeleteRangeRequest request) {
         return client.call(METHOD_DELETE_RANGE, request, false);
     }
-    
+
     @Override
     public FluentDeleteRequest delete(ByteString key) {
         return new EtcdDeleteRequest(key);
@@ -147,11 +147,14 @@ public final class EtcdKvClient implements KvClient {
 
     final class EtcdRangeRequest extends AbstractFluentRequest<FluentRangeRequest,RangeRequest,
         RangeResponse,RangeRequest.Builder> implements FluentRangeRequest {
-        
+
         EtcdRangeRequest(ByteString key) {
             super(EtcdKvClient.this.client, RangeRequest.newBuilder());
-            if(key != ALL_KEYS) builder.setKey(key);
-            else builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            if (key != ALL_KEYS) {
+                builder.setKey(key);
+            } else {
+                builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            }
         }
         @Override
         protected MethodDescriptor<RangeRequest, RangeResponse> getMethod() {
@@ -232,14 +235,17 @@ public final class EtcdKvClient implements KvClient {
             return this;
         }
     }
-    
+
     final class EtcdDeleteRequest extends AbstractFluentRequest<FluentDeleteRequest,DeleteRangeRequest,
         DeleteRangeResponse,DeleteRangeRequest.Builder> implements FluentDeleteRequest {
-        
+
         EtcdDeleteRequest(ByteString key) {
             super(EtcdKvClient.this.client, DeleteRangeRequest.newBuilder());
-            if(key != ALL_KEYS) builder.setKey(key);
-            else builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            if (key != ALL_KEYS) {
+                builder.setKey(key);
+            } else {
+                builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            }
         }
         @Override
         protected MethodDescriptor<DeleteRangeRequest, DeleteRangeResponse> getMethod() {
@@ -270,7 +276,7 @@ public final class EtcdKvClient implements KvClient {
             return this;
         }
     }
-    
+
     final class EtcdPutRequest extends AbstractFluentRequest<FluentPutRequest,PutRequest,
         PutResponse,PutRequest.Builder> implements FluentPutRequest {
         EtcdPutRequest() {
@@ -280,12 +286,12 @@ public final class EtcdKvClient implements KvClient {
             this();
             builder.setKey(key).setValue(value).setIgnoreLease(ignoreLease);
         }
-        
+
         EtcdPutRequest(ByteString key, ByteString value, long leaseId) {
             this();
             builder.setKey(key).setValue(value).setLease(leaseId);
         }
-        
+
         EtcdPutRequest(ByteString key, long lease) {
             this();
             builder.setKey(key).setLease(lease).setIgnoreValue(true);
@@ -304,15 +310,15 @@ public final class EtcdKvClient implements KvClient {
             return this;
         }
     }
-    
+
     final class EtcdTxnRequest extends AbstractFluentRequest<FluentTxnRequest,TxnRequest,
         TxnResponse,TxnRequest.Builder> implements FluentTxnRequest {
-        
+
         final Compare.Builder cmpBld = Compare.newBuilder(); //reused
         final FluentCmpTarget CMP_TARGET = new EtcdCmpTarget();
         FluentTxnSuccOps TXN_OPS = null; // lazy instantiate
         boolean idempotent = true; // set to false when any non-idempotent ops are added
-        
+
         public EtcdTxnRequest() {
             super(EtcdKvClient.this.client, TxnRequest.newBuilder());
         }
@@ -352,13 +358,12 @@ public final class EtcdKvClient implements KvClient {
             cmpBld.setKey(key).setResult(cr);
             return CMP_TARGET;
         }
-        
+
         @Override
         public FluentTxnSuccOps then() {
-            return TXN_OPS != null ? TXN_OPS
-                    : (TXN_OPS = new EtcdTxnOps());
+            return TXN_OPS != null ? TXN_OPS : (TXN_OPS = new EtcdTxnOps());
         }
-        
+
         final class EtcdCmpTarget implements FluentCmpTarget {
             @Override
             public FluentCmpTarget allInRange(ByteString rangeEnd) {
@@ -405,14 +410,17 @@ public final class EtcdKvClient implements KvClient {
                 return EtcdTxnRequest.this;
             }
         }
-        
+
         final class EtcdTxnOps implements FluentTxnSuccOps {
             private final RequestOp.Builder opBld = RequestOp.newBuilder();
             private boolean succ = true;
-            
+
             private FluentTxnSuccOps add(RequestOp.Builder op) {
-                if(succ) builder.addSuccess(op);
-                else builder.addFailure(op);
+                if (succ) {
+                    builder.addSuccess(op);
+                } else {
+                    builder.addFailure(op);
+                }
                 return this;
             }
             @Override
@@ -424,28 +432,28 @@ public final class EtcdKvClient implements KvClient {
             public FluentTxnSuccOps put(PutRequestOrBuilder putReq) {
                 idempotent = false;
                 return add(putReq instanceof PutRequest ?
-                        opBld.setRequestPut((PutRequest)putReq)
-                        : opBld.setRequestPut((PutRequest.Builder)putReq));
+                        opBld.setRequestPut((PutRequest) putReq)
+                        : opBld.setRequestPut((PutRequest.Builder) putReq));
             }
             @Override
             public FluentTxnSuccOps get(RangeRequestOrBuilder getReq) {
                 return add(getReq instanceof RangeRequest ?
-                        opBld.setRequestRange((RangeRequest)getReq)
-                        : opBld.setRequestRange((RangeRequest.Builder)getReq));
+                        opBld.setRequestRange((RangeRequest) getReq)
+                        : opBld.setRequestRange((RangeRequest.Builder) getReq));
             }
             @Override
             public FluentTxnSuccOps delete(DeleteRangeRequestOrBuilder delReq) {
                 idempotent = false;
                 return add(delReq instanceof DeleteRangeRequest ?
-                        opBld.setRequestDeleteRange((DeleteRangeRequest)delReq)
-                        : opBld.setRequestDeleteRange((DeleteRangeRequest.Builder)delReq));
+                        opBld.setRequestDeleteRange((DeleteRangeRequest) delReq)
+                        : opBld.setRequestDeleteRange((DeleteRangeRequest.Builder) delReq));
             }
             @Override
             public FluentTxnSuccOps subTxn(TxnRequestOrBuilder txnReq) {
                 idempotent = false; //TODO determine idempotence of sub txn
                 return add(txnReq instanceof TxnRequest ?
-                        opBld.setRequestTxn((TxnRequest)txnReq)
-                        : opBld.setRequestTxn((TxnRequest.Builder)txnReq));
+                        opBld.setRequestTxn((TxnRequest) txnReq)
+                        : opBld.setRequestTxn((TxnRequest.Builder) txnReq));
             }
             @Override
             public FluentTxnOps<FluentTxnSuccOps> backoffRetry() {
@@ -485,40 +493,48 @@ public final class EtcdKvClient implements KvClient {
             }
         }
     }
-    
+
     private volatile EtcdWatchClient watchClient;
-    
+
     private boolean closed;
-    
+
     private EtcdWatchClient watchClient() {
         EtcdWatchClient wc = watchClient;
-        if(wc == null) synchronized(this) {
-            if(closed) throw new IllegalStateException("client closed");
-            if((wc=watchClient) == null) {
+        if (wc == null) synchronized (this) {
+            if (closed) {
+                throw new IllegalStateException("client closed");
+            }
+            if ((wc = watchClient) == null) {
                 watchClient = wc = new EtcdWatchClient(client);
             }
         }
         return wc;
     }
-    
+
     public void close() {
-        synchronized(this) {
-            if(closed) return;
-            closed = true;
-            if(watchClient != null) watchClient.close();
+        synchronized (this) {
+            if (!closed) {
+                closed = true;
+                if (watchClient != null) {
+                    watchClient.close();
+                }
+            }
         }
     }
-    
+
     final class EtcdWatchRequest implements FluentWatchRequest {
         private final WatchCreateRequest.Builder builder = WatchCreateRequest.newBuilder();
-        
+
         private Executor executor;
 
         EtcdWatchRequest(ByteString key) {
-            if(key != ALL_KEYS) builder.setKey(key);
-            else builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            if (key != ALL_KEYS) {
+                builder.setKey(key);
+            } else {
+                builder.setKey(ZERO_BYTE).setRangeEnd(ZERO_BYTE);
+            }
         }
-        
+
         @Override
         public FluentWatchRequest filters(List<FilterType> filters) {
             builder.addAllFilters(filters);
@@ -526,7 +542,9 @@ public final class EtcdKvClient implements KvClient {
         }
         @Override
         public FluentWatchRequest filters(FilterType... filters) {
-            for(FilterType ft : filters) builder.addFilters(ft);
+            for (FilterType ft : filters) {
+                builder.addFilters(ft);
+            }
             return this;
         }
         @Override
@@ -571,8 +589,9 @@ public final class EtcdKvClient implements KvClient {
         }
         @Override
         public WatchIterator start() {
-            if(executor != null) throw new IllegalArgumentException(
-                    "executor provided for iterator-based watch");
+            if (executor != null) {
+                throw new IllegalArgumentException("executor provided for iterator-based watch");
+            }
             return watchClient().watch(builder.build());
         }
     }
@@ -581,10 +600,9 @@ public final class EtcdKvClient implements KvClient {
     public Watch watch(WatchCreateRequest request, StreamObserver<WatchUpdate> updates) {
         return watchClient().watch(request, updates);
     }
-    
+
     @Override
     public FluentWatchRequest watch(ByteString key) {
         return new EtcdWatchRequest(key);
     }
-    
 }

@@ -33,11 +33,11 @@ import io.grpc.stub.StreamObserver;
  * Lease operations
  */
 public interface LeaseClient {
-    
+
     interface FluentGrantRequest extends FluentRequest<FluentGrantRequest,LeaseGrantRequest,LeaseGrantResponse> {
         FluentGrantRequest leaseId(long leaseId);
     }
-    
+
     interface FluentMaintainRequest {
         FluentMaintainRequest leaseId(long leaseId);
         FluentMaintainRequest keepAliveFreq(int frequencySecs);
@@ -47,7 +47,7 @@ public interface LeaseClient {
         PersistentLease start();
         PersistentLease start(StreamObserver<LeaseState> observer);
     }
-    
+
     /**
      * 
      * @param leaseId
@@ -58,7 +58,7 @@ public interface LeaseClient {
      */
     @Deprecated
     ListenableFuture<LeaseGrantResponse> create(long leaseId, long ttlSecs);
-    
+
     /**
      * 
      * @param ttlSecs
@@ -70,7 +70,7 @@ public interface LeaseClient {
     default ListenableFuture<LeaseGrantResponse> create(long ttlSecs) {
         return create(0L, ttlSecs);
     }
-    
+
     /**
      * Start a fluent grant request for "one time" lease establishment. If the lease
      * is to be kept alive for some period, consider creating a {@link PersistentLease}
@@ -79,14 +79,14 @@ public interface LeaseClient {
      * @param ttlSecs
      */
     FluentGrantRequest grant(long ttlSecs);
-    
+
     /**
      * 
      * @param leaseId
      * @return future for {@link LeaseRevokeResponse}
      */
     ListenableFuture<LeaseRevokeResponse> revoke(long leaseId);
-    
+
     /**
      * 
      * @param leaseId
@@ -95,7 +95,7 @@ public interface LeaseClient {
      * @return future for {@link LeaseRevokeResponse}
      */
     ListenableFuture<LeaseRevokeResponse> revoke(long leaseId, boolean ensureWithRetries);
-    
+
     /**
      * 
      * @param leaseId
@@ -103,7 +103,7 @@ public interface LeaseClient {
      * @return future for {@link LeaseTimeToLiveResponse}
      */
     ListenableFuture<LeaseTimeToLiveResponse> ttl(long leaseId, boolean includeKeys);
-    
+
     /**
      * 
      * @param leaseId
@@ -112,14 +112,14 @@ public interface LeaseClient {
     default ListenableFuture<LeaseTimeToLiveResponse> ttl(long leaseId) {
         return ttl(leaseId, false);
     }
-    
+
     /**
      * 
      * @param leaseId
      * @return future for {@link LeaseKeepAliveResponse}
      */
     ListenableFuture<LeaseKeepAliveResponse> keepAliveOnce(long leaseId);
-    
+
     /**
      * List all existing leases
      * <p>
@@ -128,7 +128,7 @@ public interface LeaseClient {
      * @return future for {@link LeaseLeasesResponse}
      */
     ListenableFuture<LeaseLeasesResponse> list();
-    
+
     /**
      * Maintain a "persistent" lease. This will keep a lease alive indefinitely,
      * creating or recreating it if it doesn't exist. It can be cancelled/revoked

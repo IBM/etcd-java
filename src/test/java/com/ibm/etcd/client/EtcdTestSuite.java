@@ -48,21 +48,27 @@ public class EtcdTestSuite {
             etcdProcess = Runtime.getRuntime().exec("etcd");
             waitForStartup();
             ok = true;
-        } catch(IOException e) {
-            System.out.println("Failed to start etcd: "+e);
+        } catch (IOException e) {
+            System.out.println("Failed to start etcd: " + e);
             //e.printStackTrace();
         } finally {
-            if(!ok) tearDown();
+            if (!ok) {
+                tearDown();
+            }
         }
     }
 
     @AfterClass
     public static void tearDown() {
-        if(etcdProcess!=null) etcdProcess.destroy();
+        if (etcdProcess != null) {
+            etcdProcess.destroy();
+        }
     }
 
     static void waitForStartup() throws Exception {
-        if(etcdProcess == null) return;
+        if (etcdProcess == null) {
+            return;
+        }
         ExecutorService es = Executors.newSingleThreadExecutor();
         TimeLimiter tl = SimpleTimeLimiter.create(es);
         try {
@@ -70,7 +76,7 @@ public class EtcdTestSuite {
                 Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
                 BufferedReader br = new BufferedReader(isr);
                 String line;
-                while((line = br.readLine()) != null &&
+                while ((line = br.readLine()) != null &&
                         !line.contains("ready to serve client requests")) {
                     System.out.println(line);
                 }

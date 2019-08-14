@@ -46,9 +46,9 @@ public class ComposeTrustManagerFactory extends SimpleTrustManagerFactory {
     private static final Logger logger = LoggerFactory.getLogger(ComposeTrustManagerFactory.class);
 
     private final TrustManager tm;
-    
+
     private final X509TrustManager defaultTm;
-    
+
     public ComposeTrustManagerFactory(String deploymentName)
             throws CertificateException, IOException  {
         this(deploymentName, deploymentName, null);
@@ -59,57 +59,56 @@ public class ComposeTrustManagerFactory extends SimpleTrustManagerFactory {
         super(name);
 
         final X509Certificate cert;
-        if(certSource == null) cert = null;
-        else {
+        if (certSource == null) {
+            cert = null;
+        } else {
             CertificateFactory certFactory = CertificateFactory.getInstance("X.509");
-            try(InputStream in = certSource.openStream()) {
+            try (InputStream in = certSource.openStream()) {
                 cert = (X509Certificate) certFactory.generateCertificate(in);
             }
         }
-        
+
         this.defaultTm = getDefaultTrustManager(cert);
 
         this.tm = new X509TrustManager() {
             @Override
             public void checkClientTrusted(X509Certificate[] chain, String str) {
-                logger.info("Accepting a client certificate: " + chain[0].getSubjectDN() );
+                logger.info("Accepting a client certificate: " + chain[0].getSubjectDN());
             }
 
             @Override
             public void checkServerTrusted(X509Certificate[] chain, String str) throws CertificateException {
                 final X509Certificate serverCert = chain[0];
                 boolean ok = false;
-                if(defaultTm != null) try {
+                if (defaultTm != null) try {
                     // first try regular trustmanager
                     defaultTm.checkServerTrusted(chain, str);
                     ok = true;
-                } catch(CertificateException ce) {}
-                if( !ok && !serverCert.getSubjectDN().getName().equalsIgnoreCase(deploymentName)
-                        && !serverCert.getSubjectDN().getName().equalsIgnoreCase("CN=" + deploymentName) ) {
+                } catch (CertificateException ce) {}
+                if (!ok && !serverCert.getSubjectDN().getName().equalsIgnoreCase(deploymentName)
+                        && !serverCert.getSubjectDN().getName().equalsIgnoreCase("CN=" + deploymentName)) {
                     throw new CertificateException("Certificate with unknown deployment: "
                             + serverCert.getSubjectDN().getName());
                 }
-                if( cert != null ) {
-                    if ( !serverCert.getIssuerDN().equals(cert.getIssuerDN()) ) {
+                if (cert != null) {
+                    if (!serverCert.getIssuerDN().equals(cert.getIssuerDN())) {
                         throw new CertificateException("Certificate Issuers do not match: "
                                 + serverCert.getIssuerDN());
-
                     }
                     // See if certs are the same, if so we are good.
-                    if( !serverCert.equals(cert) ) try {
+                    if (!serverCert.equals(cert)) try {
                         // Not your CA's. Check if it has been signed by your CA
                         serverCert.verify(cert.getPublicKey());
-                    } catch ( Exception exc ) {
+                    } catch (Exception exc) {
                         throw new CertificateException("Certificate not trusted", exc);
                     }
                 }
-                
+
                 // this will throw if certificate's date is invalid (expired or not yet valid)
                 serverCert.checkValidity();
-                
-                if(logger.isDebugEnabled()) {
-                    logger.debug("Accepting a server certificate: "
-                            + serverCert.getSubjectDN().getName());
+
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Accepting a server certificate: " + serverCert.getSubjectDN().getName());
                 }
             }
 
@@ -119,27 +118,29 @@ public class ComposeTrustManagerFactory extends SimpleTrustManagerFactory {
             }
         };
     }
-    
+
     private static X509TrustManager getDefaultTrustManager(X509Certificate cert) {
         try {
             TrustManagerFactory defaultTmf = TrustManagerFactory
                     .getInstance(TrustManagerFactory.getDefaultAlgorithm());
             KeyStore ks = null;
-            if(cert != null) {
+            if (cert != null) {
                 ks = KeyStore.getInstance(KeyStore.getDefaultType());
                 ks.load(null, null);
                 ks.setCertificateEntry("compose-provided", cert);
             }
             defaultTmf.init(ks);
-            for(TrustManager m : defaultTmf.getTrustManagers()) {
-                if(m instanceof X509TrustManager) return (X509TrustManager) m;
+            for (TrustManager m : defaultTmf.getTrustManagers()) {
+                if (m instanceof X509TrustManager) {
+                    return (X509TrustManager) m;
+                }
             }
         } catch (GeneralSecurityException | IOException e) {
             logger.warn("Failed to look up default TrustManager", e);
         }
         return null;
     }
-    
+
     @Override
     protected TrustManager[] engineGetTrustManagers() {
         return new TrustManager[] { tm };

@@ -37,43 +37,53 @@ import io.grpc.internal.DnsNameResolverProvider;
 class StaticEtcdNameResolverFactory extends NameResolver.Factory {
 
     public static final String ETCD = "etcd";
-    
+
     protected static final NameResolver.Factory DNS_PROVIDER = new DnsNameResolverProvider();
-    
+
     // (not intended to be strict hostname validation here)
     protected static final Pattern ADDR_PATT =
             Pattern.compile("(?:https?://)?([a-zA-Z0-9\\-.]+)(?::(\\d+))?");
-    
+
     static class SubResolver {
         final NameResolver resolver;
         List<EquivalentAddressGroup> eagList = Collections.emptyList();
-        
+
         public SubResolver(URI uri, NameResolver.Helper helper) {
             this.resolver = DNS_PROVIDER.newNameResolver(uri, helper);
         }
     }
-    
+
     private final URI[] uris;
 
     public StaticEtcdNameResolverFactory(List<String> endpoints) {
-        if(endpoints == null || endpoints.isEmpty()) throw new IllegalArgumentException("endpoints");
+        if (endpoints == null || endpoints.isEmpty()) {
+            throw new IllegalArgumentException("endpoints");
+        }
         int count = endpoints.size();
         uris = new URI[count];
-        for(int i=0;i< count;i++) {
+        for (int i = 0; i < count; i++) {
             String endpoint = endpoints.get(i).trim();
             Matcher m = ADDR_PATT.matcher(endpoint);
-            if(!m.matches()) throw new IllegalArgumentException("invalid endpoint: "+endpoint);
+            if (!m.matches()) {
+                throw new IllegalArgumentException("invalid endpoint: " + endpoint);
+            }
             String portStr = m.group(2);
-            if(portStr == null) portStr = String.valueOf(EtcdClient.DEFAULT_PORT);
-            uris[i] = URI.create("dns:///"+m.group(1)+":"+portStr);
+            if (portStr == null) {
+                portStr = String.valueOf(EtcdClient.DEFAULT_PORT);
+            }
+            uris[i] = URI.create("dns:///" + m.group(1) + ":" + portStr);
         }
-        if(count > 1) Collections.shuffle(Arrays.asList(uris));
+        if (count > 1) {
+            Collections.shuffle(Arrays.asList(uris));
+        }
     }
-    
+
     @Override
     public NameResolver newNameResolver(URI targetUri, NameResolver.Helper helper) {
-        if(!ETCD.equals(targetUri.getScheme())) return null;
-        if(uris.length == 1) {
+        if (!ETCD.equals(targetUri.getScheme())) {
+            return null;
+        }
+        if (uris.length == 1) {
             return new SubResolver(uris[0], helper).resolver;
         }
         SubResolver[] resolvers = createSubResolvers(helper);
@@ -81,29 +91,33 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
             int currentCount = 0;
             @Override
             public void start(Listener listener) {
-                for(SubResolver sr : resolvers) sr.resolver.start(new Listener() {
+                for (SubResolver sr : resolvers) sr.resolver.start(new Listener() {
                     @Override
                     public void onAddresses(List<EquivalentAddressGroup> servers, Attributes attributes) {
-                        synchronized(resolvers) {
+                        synchronized (resolvers) {
                             sr.eagList = servers;
-                            List<EquivalentAddressGroup> newList = Stream.of(resolvers).flatMap(r
-                                    -> r.eagList.stream()).collect(Collectors.toList());
+                            List<EquivalentAddressGroup> newList = Stream.of(resolvers)
+                                    .flatMap(r -> r.eagList.stream()).collect(Collectors.toList());
                             currentCount = newList.size();
                             listener.onAddresses(newList, Attributes.EMPTY);
                         }
                     }
                     @Override
                     public void onError(Status error) {
-                        synchronized(resolvers) {
-                            if(currentCount == 0) listener.onError(error);
+                        synchronized (resolvers) {
+                            if (currentCount == 0) {
+                                listener.onError(error);
+                            }
                         }
                     }
                 });
             }
             @Override
             public void refresh() {
-                synchronized(resolvers) {
-                    for(SubResolver sr : resolvers) sr.resolver.refresh();
+                synchronized (resolvers) {
+                    for (SubResolver sr : resolvers) {
+                        sr.resolver.refresh();
+                    }
                 }
             }
             @Override
@@ -112,8 +126,10 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
             }
             @Override
             public void shutdown() {
-                synchronized(resolvers) {
-                    for(SubResolver sr : resolvers) sr.resolver.shutdown();
+                synchronized (resolvers) {
+                    for (SubResolver sr : resolvers) {
+                        sr.resolver.shutdown();
+                    }
                 }
             }
         };
@@ -122,7 +138,7 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
     private SubResolver[] createSubResolvers(NameResolver.Helper helper) {
         int count = uris.length;
         SubResolver[] resolvers = new SubResolver[count];
-        for(int i=0;i< count;i++) {
+        for (int i = 0; i < count; i++) {
             resolvers[i] = new SubResolver(uris[i], helper);
         }
         return resolvers;
@@ -132,5 +148,4 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
     public String getDefaultScheme() {
         return ETCD;
     }
-    
 }

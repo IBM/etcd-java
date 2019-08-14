@@ -45,27 +45,29 @@ import com.ibm.etcd.client.watch.WatchCreateException;
 import io.grpc.stub.StreamObserver;
 
 public class WatchTest {
-    
+
     static LocalNettyProxy proxy;
-    
+
     @BeforeClass
     public static void setup() {
         proxy = new LocalNettyProxy(2390);
     }
     @AfterClass
     public static void teardown() throws Exception {
-        if(proxy != null) proxy.close();
+        if (proxy != null) {
+            proxy.close();
+        }
     }
-    
+
     @Test
     public void testWatch() throws Exception {
 
         proxy.start();
 
-        try(KvStoreClient directClient = EtcdClient.forEndpoint("localhost", 2379)
+        try (KvStoreClient directClient = EtcdClient.forEndpoint("localhost", 2379)
                 .withPlainText().build();
-            KvStoreClient client = EtcdClient.forEndpoint("localhost", 2390)
-                .withPlainText().build()) {
+                KvStoreClient client = EtcdClient.forEndpoint("localhost", 2390)
+                        .withPlainText().build()) {
 
             KvClient kvc = client.getKvClient();
 
@@ -78,24 +80,24 @@ public class WatchTest {
             final StreamObserver<WatchUpdate> observer = new StreamObserver<WatchUpdate>() {
                 @Override
                 public void onNext(WatchUpdate value) {
-                    System.out.println(t(start)+"watch event: "+value);
+                    System.out.println(t(start) + "watch event: " + value);
                     watchEvents.add(value);
                 }
                 @Override
                 public void onError(Throwable t) {
-                    System.out.println(t(start)+"watch error: "+t);
+                    System.out.println(t(start) + "watch error: " + t);
                     watchEvents.add(t);
                 }
                 @Override
                 public void onCompleted() {
-                    System.out.println(t(start)+"watch completed");
+                    System.out.println(t(start) + "watch completed");
                     watchEvents.add(COMPLETED);
                 }
             };
 
             Watch watch = kvc.watch(bs("/watchtest")).asPrefix().start(observer);
             //assertFalse(watch.isDone());
-            
+
             // test blocking watch at the same time
             WatchIterator watchIterator = kvc.watch(bs("/watchtest")).asPrefix().start();
 
@@ -106,11 +108,11 @@ public class WatchTest {
 
             WatchUpdate wu = getNextSkipEmpty(watchEvents);
             assertNotNull(wu);
-            assertEquals("event: "+wu, 1, wu.getEvents().size());
+            assertEquals("event: " + wu, 1, wu.getEvents().size());
             assertEquals(EventType.PUT, wu.getEvents().get(0).getType());
             assertEquals(bs("a value"), wu.getEvents().get(0).getKv().getValue());
             assertEquals(bs("/watchtest/a"), wu.getEvents().get(0).getKv().getKey());
-            
+
             WatchUpdate wu2 = getNextSkipEmpty(watchIterator);
             assertEquals(EventType.PUT, wu2.getEvents().get(0).getType());
             assertEquals(bs("a value"), wu2.getEvents().get(0).getKv().getValue());
@@ -125,12 +127,12 @@ public class WatchTest {
             kvc.put(bs("/watchtest/c"), bs("c value")).sync();
 
             assertNull(watchEvents.poll(500, TimeUnit.MILLISECONDS));
-            
+
             assertTrue(watchIterator.hasNext());
             assertTrue(watchIterator.hasNext());
             assertEquals(bs("b value"), watchIterator.next()
                     .getEvents().get(0).getKv().getValue());
-            
+
             assertEquals(EventType.PUT, watchIterator.next()
                     .getEvents().get(0).getType()); // PUT of "/watchtest/c"
 
@@ -141,7 +143,7 @@ public class WatchTest {
             assertTrue(watch.get(1, TimeUnit.SECONDS));
 
             kvc.batch().put(kvc.put(bs("/watchtest/d"), bs("d value")).asRequest())
-                .delete(kvc.delete(bs("/watchtest/a")).asRequest()).sync();
+            .delete(kvc.delete(bs("/watchtest/a")).asRequest()).sync();
 
             wu = getNextSkipEmpty(watchEvents);
 
@@ -165,69 +167,71 @@ public class WatchTest {
             assertEquals(bs("/watchtest/e"), wu.getEvents().get(0).getKv().getKey());
 
             watch.close();
-            
+
             assertEquals(2, watchIterator.next().getEvents().size()); // (earlier batch update)
             assertEquals(bs("/watchtest/e"), watchIterator.next()
                     .getEvents().get(0).getKv().getKey());
-            
+
             watchIterator.close();
             assertNull(watchIterator.next().getHeader());
-            
+
             assertFalse(watchIterator.hasNext());
-            
+
             try {
                 watchIterator.next();
                 fail("should throw NSEE here");
-            } catch(NoSuchElementException nsee) {}
-            
+            } catch (NoSuchElementException nsee) {}
+
         } finally {
             proxy.kill();
         }
     }
-    
+
     static WatchUpdate getNextSkipEmpty(BlockingQueue<Object> watchEvents) throws InterruptedException {
-        WatchUpdate wu = (WatchUpdate)watchEvents.poll(500, TimeUnit.MILLISECONDS);
-        if(wu.getEvents().isEmpty()) wu = (WatchUpdate)watchEvents.poll(500, TimeUnit.MILLISECONDS);
+        WatchUpdate wu = (WatchUpdate) watchEvents.poll(500, TimeUnit.MILLISECONDS);
+        if (wu.getEvents().isEmpty()) {
+            wu = (WatchUpdate) watchEvents.poll(500, TimeUnit.MILLISECONDS);
+        }
         return wu;
     }
-    
+
     static WatchUpdate getNextSkipEmpty(WatchIterator wi) {
         assertTrue(wi.hasNext());
         WatchUpdate wu = wi.next();
-        if(wu.getEvents().isEmpty()) {
+        if (wu.getEvents().isEmpty()) {
             assertTrue(wi.hasNext());
             wu = wi.next();
         }
         return wu;
     }
-    
+
     @Test
     public void testResiliency() throws Exception {
-        
-        try(EtcdClient directClient = EtcdClient.forEndpoint("localhost", 2379)
+
+        try (EtcdClient directClient = EtcdClient.forEndpoint("localhost", 2379)
                 .withPlainText().build();
                 EtcdClient client = EtcdClient.forEndpoint("localhost", 2396)
-                .withPlainText().build()) {
-            
+                        .withPlainText().build()) {
+
             directClient.getKvClient().delete(bs("watch-tr-test/")).asPrefix().sync();
 
-            try(final LocalNettyProxy prox = new LocalNettyProxy(2396)) {
+            try (final LocalNettyProxy prox = new LocalNettyProxy(2396)) {
 
                 Thread proxyThread = new Thread() {
                     { setDaemon(true); }
                     @Override public void run() {
                         try {
                             int N = 4;
-                            for(int i=1;i<=N;i++) {
+                            for (int i = 1; i <= N; i++) {
                                 prox.start();
-                                Thread.sleep(1000L+(long)(Math.random()*5000));
-                                if(i < N) {
-                                    System.out.println("killing proxy "+i);
+                                Thread.sleep(1000L + (long) (Math.random() * 5000));
+                                if (i < N) {
+                                    System.out.println("killing proxy " + i);
                                     prox.kill(); // finish in running state
                                 }
-                                Thread.sleep((long)(Math.random()*4000));
+                                Thread.sleep((long) (Math.random() * 4000));
                             }
-                        } catch(Exception e) {
+                        } catch (Exception e) {
                             e.printStackTrace();
                         }
                     }
@@ -238,14 +242,14 @@ public class WatchTest {
 
                 Phaser p = new Phaser(1);
                 Map<ByteString,Object> watchedKeys = new ConcurrentHashMap<>();
-                
+
                 int i = 0;
                 // perform a bunch of watch creations/cancellations while
                 // the proxy is stopped/started
-                while(proxyThread.isAlive()) {
+                while (proxyThread.isAlive()) {
                     // put a key
-                    ByteString key = bs("watch-tr-test/"+Math.random());
-                    ByteString value = bs("value "+(i++));
+                    ByteString key = bs("watch-tr-test/" + Math.random());
+                    ByteString value = bs("value " + (i++));
                     PutResponse pr = directKv.put(key, value).sync();
                     watchedKeys.put(key, "pending");
                     p.register();
@@ -254,16 +258,20 @@ public class WatchTest {
                     AtomicReference<Watch> w = new AtomicReference<>();
                     w.set(client.getKvClient().watch(key)
                             .startRevision(pr.getHeader().getRevision())
-                            .start((ListenerObserver<WatchUpdate>)(complete,wu,err) -> {
-                                if(complete) {
-                                    if(err != null) {
+                            .start((ListenerObserver<WatchUpdate>) (complete, wu, err) -> {
+                                if (complete) {
+                                    if (err != null) {
                                         watchedKeys.replace(key, err);
                                         err.printStackTrace();
-                                    } else watchedKeys.remove(key);
-                                    if(w.get() == null) p.arrive();
-                                } else if(!wu.getEvents().isEmpty()) {
-                                    if(value.equals(wu.getEvents().get(0).getKv().getValue())) {
-                                        if(ii % 2 == 0) {
+                                    } else {
+                                        watchedKeys.remove(key);
+                                    }
+                                    if (w.get() == null) {
+                                        p.arrive();
+                                    }
+                                } else if (!wu.getEvents().isEmpty()) {
+                                    if (value.equals(wu.getEvents().get(0).getKv().getValue())) {
+                                        if (ii % 2 == 0) {
                                             // cancel every other watch
                                             w.get().close();
                                             w.set(null);
@@ -277,22 +285,22 @@ public class WatchTest {
                                     }
                                 }
                             }));
-                    Thread.sleep((long)(Math.random()*500));
+                    Thread.sleep((long) (Math.random() * 500));
                 }
-                
+
                 p.arrive();
                 p.awaitAdvanceInterruptibly(0, 8, TimeUnit.SECONDS);
-                
-                System.out.println("created "+i+" watches; left incomplete: "+watchedKeys.size());
-                
+
+                System.out.println("created " + i + " watches; left incomplete: " + watchedKeys.size());
+
                 watchedKeys.entrySet().forEach(e ->
-                System.out.println("** "+e.getKey().toStringUtf8()+"="+e.getValue()));
-                
+                System.out.println("** " + e.getKey().toStringUtf8() + "=" + e.getValue()));
+
                 assertTrue(watchedKeys.isEmpty());
             }
         }
     }
-    
+
     @Test
     public void testCreateFail() throws Exception {
         KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379)
@@ -303,12 +311,12 @@ public class WatchTest {
             Watch watch2 = kvc.watch(ByteString.copyFromUtf8("/watchtest2"))
                     .rangeEnd(ByteString.copyFromUtf8("/watchtest1"))
                     .startRevision(-5000L).start(
-                            (ListenerObserver<WatchUpdate>)(c,v,t) -> {});
+                            (ListenerObserver<WatchUpdate>) (c,v,t) -> {});
             try {
                 watch2.get(1000, TimeUnit.SECONDS);
                 fail("watch future should fail");
-            } catch(ExecutionException e) {
-                System.out.println("watch creation failed with exception: "+e);
+            } catch (ExecutionException e) {
+                System.out.println("watch creation failed with exception: " + e);
                 assertTrue(e.getCause() instanceof WatchCreateException);
             }
         } finally {

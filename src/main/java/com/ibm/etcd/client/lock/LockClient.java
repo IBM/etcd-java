@@ -32,9 +32,9 @@ public interface LockClient {
         FluentLockRequest withLease(long leaseId);
         FluentLockRequest withLease(PersistentLease lease);
     }
-    
+
     interface FluentUnlockRequest extends FluentRequest<FluentUnlockRequest,UnlockRequest,UnlockResponse> {}
-    
+
     /**
      * Acquire a lock with the given name. Unless one of the {@code withLease()}
      * methods is used, the lock will be tied to this client's session lease.
@@ -47,7 +47,7 @@ public interface LockClient {
      * @param name unique name identifying the lock
      */
     FluentLockRequest lock(ByteString name);
-   
+
     /**
      * Release the lock with the given key.
      * 

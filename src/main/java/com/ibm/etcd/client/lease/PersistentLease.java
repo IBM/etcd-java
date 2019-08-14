@@ -30,7 +30,7 @@ import io.grpc.stub.StreamObserver;
  * Use the {@link #close()} method to cancel/revoke the lease
  */
 public interface PersistentLease extends ListenableFuture<Long>, Closeable {
-    
+
     public enum LeaseState {
         /**
          * Lease existence not yet established
@@ -56,7 +56,7 @@ public interface PersistentLease extends ListenableFuture<Long>, Closeable {
          */
         CLOSED // terminal
     }
-    
+
     /**
      * @return the leaseId, or 0 if pending
      */
@@ -80,7 +80,7 @@ public interface PersistentLease extends ListenableFuture<Long>, Closeable {
      *    or -1 before initial grant
      */
     long getCurrentTtlSecs();  //TODO(maybe) or just get deadline
-    
+
     //TODO add blocking waitForState(LeaseState) method
 
     /**

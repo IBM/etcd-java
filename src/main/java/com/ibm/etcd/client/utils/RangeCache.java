@@ -97,36 +97,36 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     protected static final Logger logger = LoggerFactory.getLogger(RangeCache.class);
 
     public static final long TIMEOUT_MS = 3500L;
-    
+
     private final ByteString fromKey, toKey;
-    
+
     private final transient EtcdClient client;
     private final KvClient kvClient;
     private /*final*/ Watch watch;
-    
+
     private volatile boolean closed;
-    
+
     @GuardedBy("this")
     private ListenableFuture<Boolean> startFuture;
-    
+
     private final ConcurrentMap<ByteString,KeyValue> entries;
-    
+
     // deletion queue is used to avoid race condition where a PUT is seen
     // after a delete that it precedes
     private final NavigableSet<KeyValue> deletionQueue;
-    
+
     // non-volatile - visibility ensured via adjacent access of entries map
     private long seenUpToRev = 0L;
-    
+
     public RangeCache(EtcdClient client, ByteString prefix) {
         this(client, prefix, false);
     }
-    
+
     public RangeCache(EtcdClient client, ByteString prefix, boolean sorted) {
         // per etcd API spec: end == start+1 => prefix
         this(client, prefix, KeyUtils.plusOne(prefix), sorted);
     }
-    
+
     public RangeCache(EtcdClient client, ByteString fromKey, ByteString toKey, boolean sorted) {
         this.fromKey = fromKey;
         this.toKey = toKey;
@@ -140,7 +140,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         });
         this.listenerExecutor = GrpcClient.serialized(client.getExecutor());
     }
-    
+
     /**
      * Start the cache. This must be called before the cache will
      * automatically populate and update its internal state.
@@ -150,19 +150,22 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      *    range at or after the time this method was called
      */
     public synchronized ListenableFuture<Boolean> start() {
-        if(closed) throw new IllegalStateException("closed");
-        if(startFuture!=null) throw new IllegalStateException("already started");
-        
+        if (closed) {
+            throw new IllegalStateException("closed");
+        }
+        if (startFuture != null) {
+            throw new IllegalStateException("already started");
+        }
         return startFuture = fullRefreshCache();
     }
-    
+
     // internal method - should not be called while watch is active
     protected ListenableFuture<Boolean> fullRefreshCache() {
         Executor executor = MoreExecutors.directExecutor();
         ListenableFuture<List<RangeResponse>> rrfut;
         long seenUpTo = seenUpToRev;
         boolean firstTime = (seenUpTo == 0L);
-        if(firstTime || entries.size() <= 20) {
+        if (firstTime || entries.size() <= 20) {
             //TODO *maybe* chunking (for large caches), and maybe handle compaction (OUT_OF_RANGE response)
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
                     .backoffRetry(() -> !closed)
@@ -174,7 +177,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             RangeRequest.Builder rangeReqBld = RangeRequest.newBuilder()
                     .setKey(fromKey).setRangeEnd(toKey);
             RangeRequest newModsReq = rangeReqBld
-                    .setMinModRevision(seenUpTo+1).build();
+                    .setMinModRevision(seenUpTo + 1).build();
             RangeRequest otherKeysReq = rangeReqBld.clearMinModRevision()
                     .setMaxModRevision(seenUpTo).setKeysOnly(true).build();
             ListenableFuture<TxnResponse> trf = kvClient.batch()
@@ -182,33 +185,47 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
             rrfut = Futures.transform(trf,
-                    tr -> tr.getResponsesList().stream().map(ResponseOp::getResponseRange).collect(Collectors.toList()), executor);
+                    tr -> tr.getResponsesList().stream()
+                        .map(ResponseOp::getResponseRange)
+                        .collect(Collectors.toList()), executor);
         }
-        
+
         return Futures.transformAsync(rrfut, rrs -> {
-            if(closed) throw new CancellationException();
+            if (closed) {
+                throw new CancellationException();
+            }
             Set<ByteString> snapshot = firstTime ? null : new HashSet<>();
             RangeResponse toUpdate = rrs.get(0);
-            if(toUpdate.getKvsCount() > 0) for(KeyValue kv : toUpdate.getKvsList()) {
-                if(!firstTime) snapshot.add(kv.getKey());
-                offerUpdate(kv, true);
+            if (toUpdate.getKvsCount() > 0) {
+                for (KeyValue kv : toUpdate.getKvsList()) {
+                    if (!firstTime) {
+                        snapshot.add(kv.getKey());
+                    }
+                    offerUpdate(kv, true);
+                }
             }
             long snapshotRev = toUpdate.getHeader().getRevision();
-            if(firstTime) notifyListeners(EventType.INITIALIZED, null, true);
-            else {
-                if(rrs.size() > 1) for(KeyValue kv : rrs.get(1).getKvsList()) {
-                    snapshot.add(kv.getKey());
+            if (firstTime) {
+                notifyListeners(EventType.INITIALIZED, null, true);
+            } else {
+                if (rrs.size() > 1) {
+                    for (KeyValue kv : rrs.get(1).getKvsList()) {
+                        snapshot.add(kv.getKey());
+                    }
                 }
                 // prune deleted entries
                 KeyValue.Builder kvBld = null;
-                for(ByteString key : entries.keySet()) if(!snapshot.contains(key)) {
-                    if(kvBld == null) kvBld = KeyValue.newBuilder()
-                            .setVersion(0L).setModRevision(snapshotRev);
-                    offerUpdate(kvBld.setKey(key).build(), true);
+                for (ByteString key : entries.keySet()) {
+                    if (!snapshot.contains(key)) {
+                        if (kvBld == null) {
+                            kvBld = KeyValue.newBuilder().setVersion(0L).setModRevision(snapshotRev);
+                        }
+                        offerUpdate(kvBld.setKey(key).build(), true);
+                    }
                 }
             }
             revisionUpdate(snapshotRev);
-            
+
             Watch newWatch = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
                     .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor)
                     .start(new StreamObserver<WatchUpdate>() {
@@ -216,30 +233,35 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                         public void onNext(WatchUpdate update) {
                             List<Event> events = update.getEvents();
                             int eventCount = events != null ? events.size() : 0;
-                            if(eventCount > 0) for(Event event : events) {
-                                KeyValue kv = event.getKv();
-//                              event.getPrevKv(); //TBD
-                                switch(event.getType()) {
-                                case DELETE:
-                                    if(kv.getVersion() != 0L) kv = KeyValue.newBuilder(kv)
-                                    .setVersion(0L).clearValue().build();
-                                    // fall-thru
-                                case PUT:
-                                    offerUpdate(kv, true);
-                                    break;
-                                case UNRECOGNIZED: default:
-                                    logger.warn("Unrecognized event for key "+kv.getKey().toStringUtf8());
-                                    break;
+                            if (eventCount > 0) {
+                                for (Event event : events) {
+                                    KeyValue kv = event.getKv();
+//                                  event.getPrevKv(); //TBD
+                                    switch (event.getType()) {
+                                    case DELETE:
+                                        if (kv.getVersion() != 0L) {
+                                            kv = KeyValue.newBuilder(kv).setVersion(0L)
+                                                    .clearValue().build();
+                                        }
+                                        // fall-thru
+                                    case PUT:
+                                        offerUpdate(kv, true);
+                                        break;
+                                    case UNRECOGNIZED: default:
+                                        logger.warn("Unrecognized event for key "
+                                                + kv.getKey().toStringUtf8());
+                                        break;
+                                    }
                                 }
                             }
                             revisionUpdate(eventCount == 0 ? update.getHeader().getRevision() - 1L
-                                    : events.get(eventCount-1).getKv().getModRevision());
+                                    : events.get(eventCount - 1).getKv().getModRevision());
                         }
                         @Override
                         public void onCompleted() {
                             // should only happen after external close()
-                            if(!closed) {
-                                if(!client.isClosed()) {
+                            if (!closed) {
+                                if (!client.isClosed()) {
                                     logger.error("Watch completed unexpectedly (not closed)");
                                 }
                                 close();
@@ -248,49 +270,57 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                         @Override
                         public void onError(Throwable t) {
                             logger.error("Watch failed with exception ", t);
-                            if(t instanceof RevisionCompactedException) synchronized(RangeCache.this) {
+                            if (t instanceof RevisionCompactedException) synchronized (RangeCache.this) {
                                 // fail if happens during start, otherwise refresh
-                                if(!closed && startFuture != null && startFuture.isDone()) {
+                                if (!closed && startFuture != null && startFuture.isDone()) {
                                     startFuture = fullRefreshCache(); // will renew watch
                                 }
                             }
                         }
                     });
-            synchronized(this) {
-                if(closed) throw new CancellationException();
+            synchronized (this) {
+                if (closed) {
+                    throw new CancellationException();
+                }
                 return watch = newWatch;
             }
         }, listenerExecutor);
     }
-    
+
     // called only from listenerExecutor context
     protected void revisionUpdate(long upToRev) {
-        if(seenUpToRev >= upToRev) return;
+        if (seenUpToRev >= upToRev) {
+            return;
+        }
         seenUpToRev = upToRev;
-        
+
         // process deletion queue up to upToRec
-        if(deletionQueue.isEmpty()) return;
-        for(Iterator<KeyValue> it = deletionQueue.iterator();it.hasNext();) {
+        if (deletionQueue.isEmpty()) {
+            return;
+        }
+        for (Iterator<KeyValue> it = deletionQueue.iterator(); it.hasNext();) {
             KeyValue kv = it.next();
-            if(kv.getModRevision() > upToRev) return;
+            if (kv.getModRevision() > upToRev) {
+                return;
+            }
             it.remove();
             entries.remove(kv.getKey(), kv);
         }
     }
-    
+
     protected final List<Listener> listeners = new CopyOnWriteArrayList<>();
-    
+
     protected final Executor listenerExecutor;
-    
+
     //TODO maybe take optional listener-specific executor
     public void addListener(Listener listener) {
         listeners.add(listener);
     }
-    
+
     public boolean removeListener(Listener listener) {
         return listeners.remove(listener);
     }
-    
+
     /**
      * Interface for listening to update events from
      * the cache
@@ -312,31 +342,32 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
              */
             INITIALIZED
         }
-        
+
         /**
          * @param type
          * @param keyValue
          */
         public void event(EventType type, KeyValue keyValue);
     }
-    
+
     protected void notifyListeners(EventType type, KeyValue keyValue,
             boolean inListenerExecutor) {
-        
-        if(!inListenerExecutor) listenerExecutor.execute(()
-                -> notifyListeners(type, keyValue, true));
-        else for(Listener l : listeners) try {
-            l.event(type, keyValue);
-        } catch(RuntimeException re) {
-            logger.warn("Listener threw exception for "+type+" event"
-                    + (keyValue!= null?" for key "
-                            + keyValue.getKey().toStringUtf8():""), re);
+
+        if (!inListenerExecutor) {
+            listenerExecutor.execute(() -> notifyListeners(type, keyValue, true));
+        } else {
+            for (Listener l : listeners) try {
+                l.event(type, keyValue);
+            } catch (RuntimeException re) {
+                logger.warn("Listener threw exception for " + type + " event"
+                        + (keyValue != null ? " for key " + keyValue.getKey().toStringUtf8() : ""), re);
+            }
         }
     }
-    
-    
+
+
     //------------------------------------
-    
+
     /**
      * used to perform <b>offline</b> lease-based expiries, should
      * be called only when assumed to be disconnected and not receiving
@@ -344,10 +375,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      */
     protected KeyValue offerExpiry(ByteString key) {
         // read of map is done first as a mem barrier before reading seenUpToRev
-        return isDeleted(entries.get(key)) ? null : offerDelete(key, seenUpToRev+1L);
+        return isDeleted(entries.get(key)) ? null : offerDelete(key, seenUpToRev + 1L);
     }
-    
-    
+
+
     /**
      * assumed to <b>not</b> be called from watch/listener executor
      * 
@@ -357,7 +388,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         return offerUpdate(KeyValue.newBuilder().setKey(key)
                 .setVersion(0L).setModRevision(modRevision).build(), false);
     }
-    
+
     /**
      * @param keyValue
      * @param watchThread if being called from background watch context
@@ -365,33 +396,39 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      */
     protected KeyValue offerUpdate(final KeyValue keyValue, boolean watchThread) {
         final long modRevision = keyValue.getModRevision();
-        if(modRevision <= seenUpToRev) return kvOrNullIfDeleted(keyValue);
+        if (modRevision <= seenUpToRev) {
+            return kvOrNullIfDeleted(keyValue);
+        }
         final ByteString key = keyValue.getKey();
         final boolean isDeleted = isDeleted(keyValue);
         // can only do this optimization in watch context, otherwise there's
         // a possible (but unlikely) race with deletions
-        if(watchThread && !isDeleted) {
+        if (watchThread && !isDeleted) {
             // optimized non-deletion path
             KeyValue newKv = entries.merge(key, keyValue, (existKv,kv) ->
                 (kv.getModRevision() > existKv.getModRevision() ? kv : existKv));
-            if(newKv == keyValue) notifyListeners(EventType.UPDATED, keyValue, true);
+            if (newKv == keyValue) {
+                notifyListeners(EventType.UPDATED, keyValue, true);
+            }
             return kvOrNullIfDeleted(newKv);
         }
         KeyValue existKv = entries.get(key);
-        while(true) {
-            if(existKv != null) {
+        for (;;) {
+            if (existKv != null) {
                 long existModRevision = existKv.getModRevision();
-                if(existModRevision >= modRevision) return kvOrNullIfDeleted(existKv);
+                if (existModRevision >= modRevision) {
+                    return kvOrNullIfDeleted(existKv);
+                }
                 KeyValue newKv = entries.computeIfPresent(key, (k,v) ->
                     (existModRevision == v.getModRevision() ? keyValue : v));
-                if(newKv != keyValue) {
+                if (newKv != keyValue) {
                     existKv = newKv;
                     continue; // update failed
                 }
                 // update succeeded
-                if(isDeleted) {
+                if (isDeleted) {
                     deletionQueue.add(keyValue);
-                    if(!isDeleted(existKv)) { // previous value
+                    if (!isDeleted(existKv)) { // previous value
                         notifyListeners(EventType.DELETED, existKv, watchThread);
                     }
                     return null;
@@ -402,10 +439,12 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 }
             }
             // here existKv == null
-            if(modRevision <= seenUpToRev) return null;
-            if((existKv = entries.putIfAbsent(key, keyValue)) == null) {
+            if (modRevision <= seenUpToRev) {
+                return null;
+            }
+            if ((existKv = entries.putIfAbsent(key, keyValue)) == null) {
                 // update succeeded
-                if(isDeleted) {
+                if (isDeleted) {
                     deletionQueue.add(keyValue);
                     return null;
                 } else {
@@ -415,36 +454,40 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             }
         }
     }
-    
+
     protected static KeyValue kvOrNullIfDeleted(KeyValue fromCache) {
         return isDeleted(fromCache) ? null : fromCache;
     }
-    
+
     protected static boolean isDeleted(KeyValue kv) {
         return kv == null || kv.getVersion() == 0L;
     }
-    
+
     public KeyValue get(ByteString key) {
         return key == null ? null : kvOrNullIfDeleted(entries.get(key));
     }
-    
+
     /**
      * @return the first KeyValue or null if empty
      */
     public KeyValue getFirst() {
-        if(entries.isEmpty()) return null;
-        if(entries instanceof NavigableMap) {
+        if (entries.isEmpty()) {
+            return null;
+        }
+        if (entries instanceof NavigableMap) {
             @SuppressWarnings("unchecked")
             Map.Entry<ByteString,KeyValue> first
-            = ((NavigableMap<ByteString,KeyValue>)entries).firstEntry();
+                = ((NavigableMap<ByteString,KeyValue>) entries).firstEntry();
             return first != null ? first.getValue() : null;
         }
         Iterator<KeyValue> it = entries.values().iterator();
         return it.hasNext() ? it.next() : null;
     }
-    
+
     protected KeyValue getRemote(ByteString key, boolean weak) {
-        if(key == null) return null;
+        if (key == null) {
+            return null;
+        }
         //TODO -- async option
         RangeResponse rr = kvClient.get(key)
                 .serializable(weak).timeout(TIMEOUT_MS).sync();
@@ -452,36 +495,40 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         return kv != null ? offerUpdate(kv, false)
                 : offerDelete(key, rr.getHeader().getRevision());
     }
-    
+
     public KeyValue getRemote(ByteString key) {
         return getRemote(key, false);
     }
-    
+
     public KeyValue getRemoteWeak(ByteString key) {
         return getRemote(key, true);
     }
-    
+
     public int size() {
         return entries.size() - deletionQueue.size();
     }
-    
+
     //TODO maybe add sizeRemote() ?
-    
+
     public boolean keyExists(ByteString key) {
         // ensures deleted records (version == 0) aren't included
         return get(key) != null;
     }
-    
+
     public boolean keyExistsRemote(ByteString key) {
-        if(key == null) return false;
+        if (key == null) {
+            return false;
+        }
         //TODO -- async
         RangeResponse rr = kvClient.get(key).countOnly()
                 .timeout(TIMEOUT_MS).sync();
         boolean exists = rr.getCount() > 0;
-        if(!exists) offerDelete(key, rr.getHeader().getRevision());
+        if (!exists) {
+            offerDelete(key, rr.getHeader().getRevision());
+        }
         return exists;
     }
-    
+
     /**
      * Stores result of put operations
      */
@@ -501,11 +548,12 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         public KeyValue existingOrNull() {
             return succ ? null : kv;
         }
-        @Override public String toString() {
-            return "PutResult[succ="+succ+", kv="+kv+"]";
+        @Override
+        public String toString() {
+            return "PutResult[succ=" + succ + ", kv=" + kv + "]";
         }
     }
-    
+
     /**
      * Unconditional put. Can be used to unconditionally delete
      * by passing a null value, but it's preferable to use
@@ -516,9 +564,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * @return modRevision of updated keyValue
      */
     public long put(ByteString key, ByteString value) {
-        return putNoGet(key, value, 0L, (CompareOrBuilder[])null);
+        return putNoGet(key, value, 0L, (CompareOrBuilder[]) null);
     }
-    
+
     /**
      * Multi-purpose put or delete, returns updated or existing KeyValue
      * 
@@ -534,8 +582,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         TxnRequest treq = putTxn(key, value, true, lease, conditions);
         //TODO -- async option
         TxnResponse tr = kvClient.txnSync(treq, TIMEOUT_MS);
-        if(tr.getSucceeded()) {
-            if(value != null) {
+        if (tr.getSucceeded()) {
+            if (value != null) {
                 KeyValue putValue = tr.getResponses(1).getResponseRange().getKvs(0);
                 offerUpdate(putValue, false);
                 return new PutResult(true, putValue);
@@ -551,7 +599,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             return new PutResult(false, exist);
         }
     }
-    
+
     /**
      * @param key
      * @param value new value to put, or null to delete
@@ -562,7 +610,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         // return put(key, value, new Cmp(key, Cmp.Op.EQUAL, CmpTarget.modRevision(modRev)));
         return put(key, value, 0L, modRevCompare(key, modRev));
     }
-    
+
     /**
      * @param key
      * @param value new value to put, or null to delete
@@ -573,7 +621,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public PutResult put(ByteString key, ByteString value, long leaseId, long modRev) {
         return put(key, value, leaseId, modRevCompare(key, modRev));
     }
-    
+
     /**
      * Multi-purpose put or delete. If successful returns modRevision
      * of updated keyValue or 0 if deleted
@@ -590,8 +638,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         TxnRequest treq = putTxn(key, value, false, lease, conditions);
         //TODO -- async option
         TxnResponse tr = kvClient.txnSync(treq, TIMEOUT_MS);
-        if(!tr.getSucceeded()) return -1L;
-        else if(value != null) {
+        if (!tr.getSucceeded()) {
+            return -1L;
+        } else if (value != null) {
             KeyValue kv = tr.getResponses(1).getResponseRange().getKvs(0);
             offerUpdate(kv, false);
             return kv.getModRevision();
@@ -600,17 +649,17 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             return 0L; //TODO TBD return modRevision or 0 in this case?
         }
     }
-    
-   /**
-    * @param key
-    * @param value new value to put, or null to delete
-    * @param modRev last-modified revision to match, or 0 for put-if-absent
-    * @return -1 if condition failed, else modRevision of updated keyValue
-    */
+
+    /**
+     * @param key
+     * @param value new value to put, or null to delete
+     * @param modRev last-modified revision to match, or 0 for put-if-absent
+     * @return -1 if condition failed, else modRevision of updated keyValue
+     */
     public long putNoGet(ByteString key, ByteString value, long modRev) {
         return putNoGet(key, value, 0L, modRevCompare(key, modRev));
     }
-    
+
     /**
      * @param key
      * @param value new value to put, or null to delete
@@ -621,26 +670,36 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public long putNoGet(ByteString key, ByteString value, long leaseId, long modRev) {
         return putNoGet(key, value, leaseId, modRevCompare(key, modRev));
     }
-    
+
     protected static Compare.Builder modRevCompare(ByteString key, long modRev) {
         return Compare.newBuilder().setKey(key).setTarget(CompareTarget.MOD)
                 .setResult(CompareResult.EQUAL).setModRevision(modRev);
     }
-    
+
     protected TxnRequest putTxn(ByteString key, ByteString value,
             boolean getOnFail, long lease, CompareOrBuilder... conditions) {
         TxnRequest.Builder tb = TxnRequest.newBuilder();
-        if(conditions != null && conditions.length > 0) {
-            for(CompareOrBuilder comp : conditions) {
-               if(comp instanceof Compare) tb.addCompare((Compare)comp);
-               else tb.addCompare((Compare.Builder)comp);
+        if (conditions != null && conditions.length > 0) {
+            for (CompareOrBuilder comp : conditions) {
+                if (comp instanceof Compare) {
+                    tb.addCompare((Compare) comp);
+                } else {
+                    tb.addCompare((Compare.Builder) comp);
+                }
             }
-        } else getOnFail = false;
+        } else {
+            getOnFail = false;
+        }
         RequestOp.Builder bld = RequestOp.newBuilder();
         RequestOp getOp = getOnFail || value != null ? getReq(bld, key) : null;
-        if(value != null) tb.addSuccess(putReq(bld, key, value, lease)).addSuccess(getOp);
-        else tb.addSuccess(deleteReq(bld, key));
-        if(getOnFail) tb.addFailure(getOp);
+        if (value != null) {
+            tb.addSuccess(putReq(bld, key, value, lease)).addSuccess(getOp);
+        } else {
+            tb.addSuccess(deleteReq(bld, key));
+        }
+        if (getOnFail) {
+            tb.addFailure(getOp);
+        }
         return tb.build();
     }
     private static RequestOp getReq(RequestOp.Builder bld, ByteString key) {
@@ -654,7 +713,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     private static RequestOp deleteReq(RequestOp.Builder bld, ByteString key) {
         return bld.setRequestDeleteRange(DeleteRangeRequest.newBuilder().setKey(key)).build();
     }
-    
+
     /**
      * Unconditional delete
      * 
@@ -667,7 +726,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         offerDelete(key, drr.getHeader().getRevision());
         return drr.getDeleted() > 0;
     }
-    
+
     /**
      * Conditional delete
      * 
@@ -678,11 +737,11 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public boolean delete(ByteString key, long modRev) {
         return putNoGet(key, null, modRev) != -1L;
     }
-    
+
     public Set<ByteString> keySet() {
         return entries.keySet();
     }
-    
+
     /**
      * {@link Iterator#remove()} not supported on returned iterators
      * 
@@ -693,16 +752,18 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         // filtering iterator is unmodifiable
         return Iterators.filter(entries.values().iterator(), kv -> !isDeleted(kv));
     }
-    
+
     @Override
     public void forEach(Consumer<? super KeyValue> action) {
         // avoid some allocations
         entries.values().forEach(kv -> {
-            if(!isDeleted(kv)) action.accept(kv);
+            if (!isDeleted(kv)) {
+                action.accept(kv);
+            }
         });
     }
-    
-    
+
+
     /**
      * Iterator whose contents is guaranteed to be sequentially consistent
      * with remote updates to the cached range.
@@ -712,13 +773,13 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public Iterator<KeyValue> strongIterator() {
         entries.get(fromKey); // memory barrier prior to reading seenUpToRev
         long seenUpTo = seenUpToRev;
-        
-        if(seenUpTo == 0L) {
+
+        if (seenUpTo == 0L) {
             ListenableFuture<Boolean> startFut;
-            synchronized(this) {
+            synchronized (this) {
                 startFut = startFuture;
             }
-            if(startFut == null) {
+            if (startFut == null) {
                 // cache has not yet been started
                 return kvClient.get(fromKey).rangeEnd(toKey)
                         .timeout(120_000L).sync().getKvsList().iterator();
@@ -726,15 +787,15 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 startFut.get(2L, TimeUnit.MINUTES);
                 // now started
                 seenUpTo = seenUpToRev;
-            } catch(TimeoutException te) {
+            } catch (TimeoutException te) {
                 throw Status.DEADLINE_EXCEEDED.asRuntimeException();
-            } catch(ExecutionException e) {
+            } catch (ExecutionException e) {
                 throw Status.UNKNOWN.withCause(e).asRuntimeException();
-            } catch(InterruptedException|CancellationException e) {
+            } catch (InterruptedException|CancellationException e) {
                 throw Status.CANCELLED.withCause(e).asRuntimeException();
             }
         }
-        
+
         /* 
          * This logic is similar to that in fullRefreshCache(), but
          * it includes an optimistic initial comparison of counts
@@ -760,9 +821,11 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         try {
             txnResp = kvClient.batch().get(newModsReq).get(curCountReq)
                     .get(seenCountReq).timeout(8000L).sync();
-        } catch(RuntimeException e) {
+        } catch (RuntimeException e) {
             Code code = Status.fromThrowable(e).getCode();
-            if(code != Code.OUT_OF_RANGE) throw e;
+            if (code != Code.OUT_OF_RANGE) {
+                throw e;
+            }
             // if (2) above fails due to compaction, also retrieve all current keys
             RangeRequest otherKeysReq = rangeReqBld.clearMinModRevision()
                     .setMaxModRevision(seenUpTo).setKeysOnly(true).build();
@@ -771,56 +834,68 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         }
 
         long revNow = txnResp.getHeader().getRevision();
-        if(revNow > seenUpToRev) {
+        if (revNow > seenUpToRev) {
             RangeResponse newModKvs = txnResp.getResponses(0).getResponseRange();
             List<KeyValue> otherKeys;
-            if(txnResp.getResponsesCount() == 2) {
+            if (txnResp.getResponsesCount() == 2) {
                 // this means we must have taken the compacted exception path above
                 otherKeys = txnResp.getResponses(1).getResponseRange().getKvsList();
-            }
-            else if(txnResp.getResponses(1).getResponseRange().getCount() <  // <- latest count
+            } else if (txnResp.getResponses(1).getResponseRange().getCount() <  // <- latest count
                     txnResp.getResponses(2).getResponseRange().getCount()) { // <- count at seenUpTo
                 // if counts don't match, there must have been deletions since seenUpTo,
                 // so additionally retrieve all current keys
                 RangeRequest otherKeysReq = rangeReqBld.clearMinModRevision()
                         .setMaxModRevision(seenUpTo).setKeysOnly(true).build();
                 otherKeys = waitFor(kvClient.get(otherKeysReq), 60_000L).getKvsList(); // longer timeout
+            } else {
+                otherKeys = null;
             }
-            else otherKeys = null;
 
             boolean newKvs = newModKvs.getKvsCount() > 0;
-            if(otherKeys != null) { // if this is true, there *might* be deletions to process
-                if(otherKeys.isEmpty() && !newKvs) return Collections.emptyIterator();
+            if (otherKeys != null) { // if this is true, there *might* be deletions to process
+                if (otherKeys.isEmpty() && !newKvs) {
+                    return Collections.emptyIterator();
+                }
                 // bring cache up to date with recently deleted kvs
                 Set<ByteString> keys = Stream.concat(otherKeys.stream(), newModKvs.getKvsList().stream())
                         .map(kv -> kv.getKey()).collect(Collectors.toSet());
                 entries.values().stream().filter(kv -> kv.getModRevision() < revNow && !keys.contains(kv.getKey()))
-                .forEach(kv -> offerDelete(kv.getKey(), revNow));
+                    .forEach(kv -> offerDelete(kv.getKey(), revNow));
             }
 
             // bring cache up to date with recently modified kvs
-            if(newKvs) newModKvs.getKvsList().forEach(kv -> offerUpdate(kv, false));
+            if (newKvs) {
+                newModKvs.getKvsList().forEach(kv -> offerUpdate(kv, false));
+            }
 
-            if(revNow > seenUpToRev) listenerExecutor.execute(() -> revisionUpdate(revNow));
+            if (revNow > seenUpToRev) {
+                listenerExecutor.execute(() -> revisionUpdate(revNow));
+            }
         }
         return iterator();
     }
-    
-    
+
     @Override
     public synchronized void close() {
-        if(closed) return;
-        if(startFuture != null) {
-            if(watch != null) watch.close();
-            else startFuture.addListener(() -> {
-                if(watch != null) watch.close();
-            }, MoreExecutors.directExecutor());
+        if (closed) {
+            return;
+        }
+        if (startFuture != null) {
+            if (watch != null) {
+                watch.close();
+            } else {
+                startFuture.addListener(() -> {
+                    if (watch != null) {
+                        watch.close();
+                    }
+                }, MoreExecutors.directExecutor());
+            }
         }
         closed = true;
     }
-    
+
     public boolean isClosed() {
         return closed;
     }
-    
+
 }

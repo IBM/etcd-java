@@ -24,34 +24,38 @@ import com.google.protobuf.UnsafeByteOperations;
 public class KeyUtils {
 
     private KeyUtils() {} // static only
-    
+
     public static final ByteString ZERO_BYTE = singleByte(0);
-    
+
     public static ByteString plusOne(ByteString key) {
         int max = key.size() - 1;
-        if(max < 0) return singleByte(1);
+        if (max < 0) {
+            return singleByte(1);
+        }
         int lastPlusOne = key.byteAt(max) + 1;
         ByteString excludeLast = key.substring(0, max);
         return lastPlusOne == 0 ? plusOne(excludeLast)
                 : excludeLast.concat(singleByte(lastPlusOne));
     }
-    
+
     public static ByteString singleByte(int b) {
         return UnsafeByteOperations.unsafeWrap(new byte[]{(byte)b});
     }
-    
+
     public static int compareByteStrings(ByteString bs1, ByteString bs2) {
         int s1 = bs1.size(), s2 = bs2.size(), n = Math.min(s1, s2);
-        for (int i = 0 ; i < n ; i++) {
+        for (int i = 0; i < n; i++) {
             int cmp = Byte.compare(bs1.byteAt(i), bs2.byteAt(i));
-            if (cmp != 0) return cmp;
+            if (cmp != 0) {
+                return cmp;
+            }
         }
         return s1 - s2;
     }
-    
+
     public static ByteString bs(String str) {
         return str != null ? ByteString.copyFromUtf8(str) : null;
     }
-    
+
     //TODO other stuff for namespaces etc
 }

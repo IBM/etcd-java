@@ -42,27 +42,27 @@ public interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,Resp
     FR backoffRetry();
     FR backoffRetry(Condition precondition);
     ReqT asRequest();
-    
-    
+
+
     @SuppressWarnings("unchecked")
     abstract class AbstractFluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,RespT,BldT
         extends Builder<BldT>> implements FluentRequest<FR,ReqT,RespT> {
-        
+
         protected final GrpcClient client;
         protected final BldT builder;
         protected RetryStrategy retryStrategy = RetryStrategy.BASIC;
         protected Condition precondition;
         protected long timeoutMs;
         protected Deadline deadline;
-        
+
         protected AbstractFluentRequest(GrpcClient client, BldT builder) {
             this.client = client;
             this.builder = builder;
         }
-        
+
         protected abstract MethodDescriptor<ReqT,RespT> getMethod();
         protected abstract boolean idempotent();
-        
+
         @Override
         public FR timeout(long millisecs) {
             this.timeoutMs = millisecs;
@@ -90,7 +90,7 @@ public interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,Resp
         }
         @Override
         public ListenableFuture<RespT> async(Executor executor) {
-            return client.call(getMethod(), precondition, (ReqT)builder.build(),
+            return client.call(getMethod(), precondition, (ReqT) builder.build(),
                     executor, GrpcClient.retryDecision(idempotent()), 
                     retryStrategy == RetryStrategy.BACKOFF, deadline, timeoutMs);
         }
