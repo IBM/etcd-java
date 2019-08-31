@@ -21,7 +21,7 @@ import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.ACTIVE_NO_CON
 import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.CLOSED;
 import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.EXPIRED;
 import static com.ibm.etcd.client.lease.PersistentLease.LeaseState.PENDING;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import java.io.Closeable;
@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -383,7 +383,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         }
     }
 
-    boolean streamEstablished = false; // accessed only from responseExecutor
+    boolean streamEstablished; // accessed only from responseExecutor
 
     protected final ResilientResponseObserver<LeaseKeepAliveRequest,LeaseKeepAliveResponse> responseObserver =
             new ResilientResponseObserver<LeaseKeepAliveRequest,LeaseKeepAliveResponse>() {
@@ -395,9 +395,13 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             allLeases.forEach(LeaseRecord::reconnected);
         }
         @Override
-        public void onReplaced(StreamObserver<LeaseKeepAliveRequest> newStream) {
+        public void onReplaced(StreamObserver<LeaseKeepAliveRequest> newReqStream) {
+            if (!closed) {
+                logger.info("onReplaced called for lease request stream"
+                        + (newReqStream == null ? " with newReqStream == null" : ""));
+            }
             streamEstablished = false;
-            kaReqExecutor.execute(() -> { kaReqStream = newStream; });
+            kaReqExecutor.execute(() -> { kaReqStream = newReqStream; });
             allLeases.forEach(LeaseRecord::connectionLost);
         }
         @Override
@@ -428,7 +432,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             kaReqExecutor.execute(() -> {
                 StreamObserver<LeaseKeepAliveRequest> stream = kaReqStream;
                 if (stream != null) {
-                    kaReqStream.onError(t);
+                    stream.onError(t);
                 }
             });
         }
@@ -447,11 +451,16 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         // all state is modified only prior to starting or in event loop
         ListenableFuture<LeaseGrantResponse> createFuture;
 
+        // this reflects the value of EtcdLeaseClient#streamEstablished,
+        // but accessed only from this PL's event loop
+        boolean connected;
+
         long leaseId; // zero or final
-        long keepAliveTtlSecs = -1L;
-        long expiryTimeMs = -1L;
-        boolean connected; //TBC
-        LeaseState state = PENDING;
+        volatile int keepAliveTtlSecs = -1;
+        volatile long expiryTimeMs = -1L;
+        volatile LeaseState state = PENDING;
+
+        ScheduledFuture<?> nextKeepAlive;
 
         public LeaseRecord(long leaseId,
                 int minExpirySecs, int intervalSecs,
@@ -488,7 +497,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             try {
                 observer.onNext(state);
             } catch (RuntimeException e) {
-                logger.warn("state observer onNext(" + state + ") method threw", e);
+                logger.warn("State observer onNext(" + state + ") method threw", e);
                 observers.remove(observer);
                 try {
                     // per StreamObserver contract
@@ -499,7 +508,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             if (state == CLOSED) try {
                 observer.onCompleted();
             } catch (RuntimeException e) {
-                logger.warn("state observer onComplete method threw", e);
+                logger.warn("State observer onComplete method threw", e);
             }
             return true;
         }
@@ -546,6 +555,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         // *not* called from event loop
         void processKeepAliveResponse(LeaseKeepAliveResponse lkar) {
+            // assert leaseId == lkar.getID();
             eventLoop.execute(() -> processTtlFromServer(lkar.getTTL()));
         }
 
@@ -554,15 +564,14 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             if (state == CLOSED) {
                 return;
             }
-            // assert leaseId == lkar.getID();
             if (newTtl <= 0L) {
                 // lease not found, trigger create
                 expiryTimeMs = 0L;
-                keepAliveTtlSecs = 0L;
+                keepAliveTtlSecs = 0;
                 changeState(EXPIRED);
                 create();
             } else {
-                updateKeepAlive(newTtl);
+                updateKeepAlive((int) Math.min(newTtl, Integer.MAX_VALUE));
                 changeState(ACTIVE);
             }
         }
@@ -571,21 +580,15 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         void connectionLost() {
             eventLoop.execute(() -> {
                 connected = false;
-                // wait 1.5 sec before exposing disconnection externally
-                ses.schedule(() -> {
-                    eventLoop.execute(() -> {
-                        if (connected) {
-                            return;
-                        }
-                        long ttlSecs = getCurrentTtlSecs(); 
-                        LeaseState newState = ttlSecs > 0 ? ACTIVE_NO_CONN : EXPIRED;
-                        changeState(newState); // won't change if pending
-                        if (ttlSecs > 0) {
-                            ses.schedule(this::checkExpired, ttlSecs, SECONDS);
-                            //TODO(maybe) cancel on ttl update? prob no
-                        }
-                    });
-                }, 1500L, MILLISECONDS);
+                long ttlSecs = getCurrentTtlSecs();
+                // state changes won't have effect if pending
+                if (ttlSecs > 0) {
+                    changeState(ACTIVE_NO_CONN);
+                    ses.schedule(this::checkExpired, ttlSecs, SECONDS);
+                    //TODO(maybe) cancel on ttl update? prob no
+                } else {
+                    changeState(EXPIRED);
+                }
             });
         }
 
@@ -612,6 +615,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             }
 
             state = targetState; // change state before completing future
+            logStateChange(stateBefore, targetState);
             long leaseToSet = stateBefore == PENDING && targetState == ACTIVE ? leaseId : -1L;
 
             Iterator<StreamObserver<LeaseState>> snapshot = !observers.isEmpty()
@@ -628,6 +632,16 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             });
         }
 
+        private void logStateChange(LeaseState from, LeaseState to) {
+            // Only log "abnormal" changes at info level
+            if (from == LeaseState.ACTIVE_NO_CONN || from == LeaseState.EXPIRED
+                    || to == LeaseState.ACTIVE_NO_CONN || to == LeaseState.EXPIRED) {
+                logger.info(this + " state changed from " + from + " to " + to);
+            } else if (logger.isDebugEnabled()) {
+                logger.debug(this + " state changed from " + from + " to " + to);
+            }
+        }
+
         // called from start method and event loop
         void create() {
             if (createFuture != null || state == CLOSED) {
@@ -637,11 +651,15 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             createFuture = client.call(METHOD_LEASE_GRANT, () -> state != CLOSED,
                     LeaseGrantRequest.newBuilder().setID(leaseId).setTTL(ttlSecs).build(),
                     eventLoop, (t,r) -> {
+                        // With no deadline, this policy means we will retry indefinitely
+                        // on failures unless the stream is disconnected or we receive a 
+                        // failed precondition response indicating that the lease is
+                        // already established
                         Code code = GrpcClient.codeFromThrowable(t);
                         return connected && code != Code.ALREADY_EXISTS
                                 && code != Code.FAILED_PRECONDITION;
                     },
-                    true, null, 0L); //TODO timeout TBD
+                    true, null, 0L);
             Futures.addCallback(createFuture, (FutureListener<LeaseGrantResponse>) (result,t) -> {
                 createFuture = null;
                 if (state == CLOSED) {
@@ -662,24 +680,37 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         }
 
         // called from event loop, only for ttl > 0, 
-        private void updateKeepAlive(long newTtlSecs) {
+        private void updateKeepAlive(int newTtlSecs) {
             keepAliveTtlSecs = newTtlSecs;
             expiryTimeMs = System.currentTimeMillis() + 1000L * newTtlSecs;
             if (newTtlSecs <= intervalSecs) {
                 logger.warn("Keepalive ttl too short to meet target interval of "
                         + intervalSecs + " for lease " + leaseId);
             }
+            if (!connected) {
+                return;
+            }
             //TODO(maybe) or use MIN_INTERVAL_SECS here
-            long ttNextKaSecs = Math.max(intervalSecs, newTtlSecs - minExpirySecs);
-            ses.schedule(() -> eventLoop.execute(this::sendKeepAliveIfNeeded),
-                    ttNextKaSecs, TimeUnit.SECONDS);
+            int ttNextKaSecs = Math.max(intervalSecs, newTtlSecs - minExpirySecs);
+            if (ttNextKaSecs <= 0) {
+                sendKeepAlive(leaseId);
+            } else {
+                nextKeepAlive = ses.schedule(() -> eventLoop.execute(this::sendKeepAliveIfNeeded),
+                        ttNextKaSecs, SECONDS);
+            }
         }
 
         // called from event loop
         private void sendKeepAliveIfNeeded() {
-            if (connected && state != CLOSED && leaseId > 0L
-                    && getCurrentTtlSecs() <= minExpirySecs) {
+            if (!connected || state == CLOSED || leaseId == 0L) {
+                return;
+            }
+            int ttNextKaSecs = (int) getCurrentTtlSecs() - minExpirySecs;
+            if (ttNextKaSecs <= 0) {
                 sendKeepAlive(leaseId);
+            } else if (nextKeepAlive == null || nextKeepAlive.getDelay(NANOSECONDS) <= 0L) {
+                nextKeepAlive = ses.schedule(() -> eventLoop.execute(this::sendKeepAliveIfNeeded),
+                        ttNextKaSecs, SECONDS);
             }
         }
 
@@ -725,12 +756,15 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
             Futures.addCallback(fut, (FutureListener<LeaseRevokeResponse>) (v,t) -> {
                 if (t == null || isNotFound(t)) {
                     expiryTimeMs = 0L;
-                    keepAliveTtlSecs = 0L;
+                    keepAliveTtlSecs = 0;
                 }
             }, directExecutor());
         }
 
-        //TODO TBD external getter field visibility/mutual consistency
+        @Override
+        public String toString() {
+            return "PersistentLease[id=" + leaseId + "]";
+        }
 
         @Override
         public long getCurrentTtlSecs() {
@@ -744,7 +778,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         @Override
         public long getLeaseId() {
-            return leaseId;
+            return isDone() ? leaseId : 0L;
         }
 
         @Override
@@ -754,7 +788,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         @Override
         public long getPreferredTtlSecs() {
-            return minExpirySecs+intervalSecs;
+            return minExpirySecs + intervalSecs;
         }
 
         @Override
@@ -773,6 +807,11 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         public boolean cancel(boolean mayInterruptIfRunning) { return false; }
         @Override
         public void close() {}
+
+        @Override
+        public String toString() {
+            return "SessionLease[id=" + leaseId + "]";
+        }
     }
 
     private static boolean isNotFound(Throwable t) {
