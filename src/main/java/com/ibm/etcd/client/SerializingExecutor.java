@@ -52,7 +52,7 @@ public class SerializingExecutor implements Executor {
     }
 
     protected void logTaskUncheckedException(Throwable t) {
-        logger.error("Uncaught task exception: "+t, t);
+        logger.error("Uncaught task exception: " + t, t);
     }
 
     @SuppressWarnings("serial")

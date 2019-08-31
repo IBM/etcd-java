@@ -378,7 +378,7 @@ public final class EtcdWatchClient implements Closeable {
             return null;
         }
         if (requestStream == null) {
-            logger.debug("watch stream starting");
+            logger.debug("Watch stream starting");
             requestStream = client.callStream(METHOD_WATCH, responseObserver, eventLoop);
         }
         return requestStream;
@@ -390,7 +390,7 @@ public final class EtcdWatchClient implements Closeable {
             if (requestStream != null && activeWatchers.isEmpty() && pendingCreate.isEmpty()) {
                 //TODO probably later change to use ClientCallStreamObserver.cancel()
                 requestStream.onError(CANCEL_EXCEPTION);
-                logger.debug("watch stream cancelled due to there being no active watches");
+                logger.debug("Watch stream cancelled due to there being no active watches");
                 requestStream = null;
             }
         }
@@ -494,7 +494,7 @@ public final class EtcdWatchClient implements Closeable {
         WatcherRecord wrec;
         if (wr.getCreated()) {
             if (logger.isDebugEnabled()) {
-                logger.debug("watch create response received for id " + watchId);
+                logger.debug("Watch create response received for id " + watchId);
             }
             wrec = pendingCreate.poll();
             if (wrec == null) {

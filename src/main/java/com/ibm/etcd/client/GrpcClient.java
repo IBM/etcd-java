@@ -498,7 +498,7 @@ public class GrpcClient {
                 } else {
                     //TODO this *could* overlap with an in-progress
                     //   onNext (***) above in the sendViaEventLoop == false case, but unlikely
-                    // for now, delay sending the close to further minimize the chance
+                    // For now, delay sending the close to further minimize the chance
                     close(err, false);
                 }
             }
@@ -582,7 +582,7 @@ public class GrpcClient {
                 }
                 if (!finalError) {
                     int errCount = ++errCounter;
-                    String msg = "retryable onError #" + errCount
+                    String msg = "Retryable onError #" + errCount
                             + " on underlying stream of method " + method.getFullMethodName();
                     if (logger.isDebugEnabled()) {
                         logger.info(msg, t);

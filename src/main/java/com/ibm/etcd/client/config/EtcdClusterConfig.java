@@ -174,12 +174,12 @@ public class EtcdClusterConfig {
                 config.certificate = Files.asByteSource(certFile);
             } else {
                 // will fall back to embedded if present
-                logger.warn("cant find certificate file: "+jsonConfig.certificateFile);
+                logger.warn("Can't find certificate file: " + jsonConfig.certificateFile);
             }
         }
         if (jsonConfig.certificate != null) {
             if (config.certificate != null) {
-                logger.warn("ignoring json-embedded cert because file was also provided");
+                logger.warn("Ignoring json-embedded cert because file was also provided");
             } else {
                 config.certificate = ByteSource.wrap(jsonConfig.certificate.getBytes(UTF_8));
             }
