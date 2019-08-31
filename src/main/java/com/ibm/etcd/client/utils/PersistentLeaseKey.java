@@ -20,6 +20,7 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executor;
 
+import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -42,11 +43,8 @@ import com.ibm.etcd.api.TxnResponse;
  * If it doesn't already exist or is deleted by someone else, it will be
  * (re)-created with a provided default value.
  * <p>
- * Can be optionally associated with a {@link RangeCache} within whose range
- * the key lies. Doing so ensures the contents of the RangeCache will immediately
- * reflect changes in the key-value's state caused by this class. In particular,
- * the key will be removed from the cache upon lease expiry while disconnected
- * from the etcd cluster.
+ * Can be optionally associated with a {@link RangeCache} within whose range the
+ * key lies. Doing so helps to ensure local state consistency between the two.
  * <p>
  * Closing the {@link PersistentLeaseKey} will always delete the associated
  * key-value.
@@ -66,24 +64,25 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     private volatile ByteString defaultValue;
 
     // these only modified in serialized context
+    protected boolean leaseActive;
     protected ListenableFuture<?> updateFuture;
     protected SettableFuture<Object> closeFuture; // non-null => closing or closed
 
     /**
      * 
      * @param client
-     * @param lease
+     * @param lease if null will use client's session lease
      * @param key
      * @param defaultValue
      * @param rangeCache optional, may be null
      */
     public PersistentLeaseKey(EtcdClient client, PersistentLease lease,
             ByteString key, ByteString defaultValue, RangeCache rangeCache) {
-        this.client = client;
+        this.client = Preconditions.checkNotNull(client, "client");
         //TODO if rangeCache != null, verify key lies within its range
         this.rangeCache = rangeCache;
         this.lease = lease;
-        this.key = key;
+        this.key = Preconditions.checkNotNull(key, "key");
         this.defaultValue = defaultValue;
         this.stateObserver = this::leaseStateChanged;
     }
@@ -91,15 +90,17 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
     protected void leaseStateChanged(boolean c, LeaseState newState, Throwable t) {
         executor.execute(() -> {
             if (newState == LeaseState.ACTIVE) {
+                leaseActive = true;
                 putKey(lease.getLeaseId());
-            } else if (newState == LeaseState.EXPIRED && rangeCache != null) {
-                rangeCache.offerExpiry(key);
+            } else {
+                leaseActive = false;
             }
         });
     }
 
+    @Deprecated
     protected boolean isActive() {
-        return lease != null && lease.getState() == LeaseState.ACTIVE;
+        return leaseActive;
     }
 
     /**
@@ -143,14 +144,15 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
      * Sets value to use if keyvalue has to be recreated, value of key on
      * server isn't otherwise changed
      * 
-     * @param value
+     * @param value must not be null
      */
     public void setDefaultValue(ByteString value) {
-        this.defaultValue = value;
+        this.defaultValue = Preconditions.checkNotNull(value, "value");
     }
 
     // called only from our serialized executor context
     protected void putKey(long leaseId) {
+        // assert leaseActive;
         if (leaseId == 0L || closeFuture != null) {
             return;
         }
@@ -164,18 +166,17 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         // or creates the key with the lease if it doesn't exist
         PutRequest.Builder putBld = PutRequest.newBuilder().setKey(key).setLease(leaseId);
         KvClient.FluentTxnRequest req = client.getKvClient().txnIf().exists(key)
-                .backoffRetry(() -> closeFuture == null && isActive());
+                .backoffRetry(() -> closeFuture == null && leaseActive);
         ListenableFuture<?> fut;
-        ListenableFuture<TxnResponse> txnFut;
         if (rangeCache == null) {
-            fut = txnFut = req.then().put(putBld.setIgnoreValue(true))
+            fut = req.then().put(putBld.setIgnoreValue(true))
                     .elseDo().put(putBld.setIgnoreValue(false).setValue(defaultValue))
-                    .async();
+                    .async(executor);
         } else {
             RangeRequest getOp = RangeRequest.newBuilder().setKey(key).build();
-            txnFut = req.then().put(putBld.setIgnoreValue(true)).get(getOp)
+            ListenableFuture<TxnResponse> txnFut = req.then().put(putBld.setIgnoreValue(true)).get(getOp)
                     .elseDo().put(putBld.setIgnoreValue(false).setValue(defaultValue)).get(getOp)
-                    .async();
+                    .async(executor);
             fut = Futures.transform(txnFut,
                     tr -> rangeCache.offerUpdate(tr.getResponses(1).getResponseRange().getKvs(0), false),
                     directExecutor());
@@ -186,10 +187,10 @@ public class PersistentLeaseKey extends AbstractFuture<ByteString> implements Au
         // this callback is to trigger an immediate retry in case the attempt was cancelled by a more
         // recent lease state change to active
         Futures.addCallback(fut, (FutureListener<Object>) (v,t) -> {
-            if (t instanceof CancellationException && isActive()) {
+            if (t instanceof CancellationException && leaseActive) {
                 putKey(leaseId);
             }
-        }, executor);
+        }, directExecutor());
 
         updateFuture = fut;
     }

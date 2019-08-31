@@ -33,6 +33,7 @@ import com.ibm.etcd.client.kv.KvClient;
 
 import io.grpc.Deadline;
 import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.Status.Code;
 
 import com.ibm.etcd.api.KeyValue;
@@ -79,6 +80,14 @@ public class KvTest {
             assertTrue(kvc.put(a, v2).sync().getHeader().getRevision() > 0);
             assertEquals(v2, kvc.put(a, v1).prevKv().sync().getPrevKv().getValue());
 
+            // put with non-existent leaseId
+            try {
+                kvc.put(b, v1, 12345L).sync();
+                fail("lease should not exist");
+            } catch (StatusRuntimeException sre) {
+                assertEquals(Code.NOT_FOUND, sre.getStatus().getCode());
+            }
+            
             // basic get
             RangeResponse rr = kvc.get(bs("a")).sync();
             assertEquals(1L, rr.getCount());

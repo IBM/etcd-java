@@ -369,13 +369,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     //------------------------------------
 
     /**
-     * used to perform <b>offline</b> lease-based expiries, should
-     * be called only when assumed to be disconnected and not receiving
-     * watch updates
+     * @deprecated this method now has no effect
      */
     protected KeyValue offerExpiry(ByteString key) {
-        // read of map is done first as a mem barrier before reading seenUpToRev
-        return isDeleted(entries.get(key)) ? null : offerDelete(key, seenUpToRev + 1L);
+        return get(key);
     }
 
 
@@ -505,7 +502,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     }
 
     public int size() {
-        return entries.size() - deletionQueue.size();
+        return Math.max(0, entries.size() - deletionQueue.size());
     }
 
     //TODO maybe add sizeRemote() ?
