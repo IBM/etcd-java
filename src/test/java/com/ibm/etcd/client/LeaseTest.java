@@ -177,7 +177,7 @@ public class LeaseTest {
 
             Thread.sleep(500L);
             System.out.println("ttl now " + pl.getCurrentTtlSecs() + "s");
-            assertTrue(pl.getCurrentTtlSecs() > minTtl);
+            assertTrue(pl.getCurrentTtlSecs() >= minTtl);
 
             proxy.kill();
             long afterKill = System.nanoTime();
@@ -200,7 +200,7 @@ public class LeaseTest {
             System.out.println("expired after " + expiredMs + "ms");
 
             // make sure it lasted at least minTtl
-            assertTrue("expired too quickly", expiredMs >= minTtl*1000L);
+            assertTrue("expired too quickly", expiredMs > (minTtl - 1)*1000L);
 
             assertFalse(pl2.isDone()); // second lease still waiting
 
