@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client.watch;
 
+import com.google.common.base.Strings;
 import com.ibm.etcd.api.ResponseHeader;
 
 /**
@@ -28,7 +29,7 @@ public class WatchCancelledException extends RuntimeException {
     protected final String reason;
 
     WatchCancelledException(String message, ResponseHeader header, String reason) {
-        super(message == null ? reason : (reason == null ? message : (message + "; " + reason)));
+        super(message == null ? reason : (Strings.isNullOrEmpty(reason) ? message : (message + "; " + reason)));
         this.header = header;
         this.reason = reason;
     }

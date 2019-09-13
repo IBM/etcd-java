@@ -23,10 +23,14 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -39,6 +43,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.io.ByteSource;
+import com.google.common.util.concurrent.ForwardingExecutorService;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -97,6 +102,7 @@ public class EtcdClient implements KvStoreClient {
     private final ByteString name, password;
 
     private final MultithreadEventLoopGroup internalExecutor;
+    private final ScheduledExecutorService sharedInternalExecutor;
     private final GrpcClient grpc;
 
     private final ManagedChannel channel;
@@ -265,7 +271,8 @@ public class EtcdClient implements KvStoreClient {
         Predicate<Throwable> rr = name != null ? EtcdClient::reauthRequired : null;
         Supplier<CallCredentials> rc = name != null ? this::refreshCredentials : null;
 
-        this.grpc = new GrpcClient(channel, rr, rc, internalExecutor,
+        this.sharedInternalExecutor = new SharedScheduledExecutorService(internalExecutor);
+        this.grpc = new GrpcClient(channel, rr, rc, sharedInternalExecutor,
                 () -> Thread.currentThread() instanceof EtcdEventThread,
                 userExecutor, sendViaEventLoop, defaultTimeoutMs);
         if (initialAuth) {
@@ -464,6 +471,14 @@ public class EtcdClient implements KvStoreClient {
     public Executor getExecutor() {
         return grpc.getResponseExecutor();
     }
+  
+    /**
+     * Care should be taken not to use this executor for any blocking
+     * or CPU intensive tasks.
+     */
+    public ScheduledExecutorService internalScheduledExecutor() {
+        return sharedInternalExecutor;
+    }
 
     // ------- utilities
 
@@ -478,6 +493,50 @@ public class EtcdClient implements KvStoreClient {
     protected static final class EtcdEventThread extends FastThreadLocalThread {
         public EtcdEventThread(Runnable r) {
             super(r);
+        }
+    }
+
+    /**
+     * Wrapper to prevent direct shutdown
+     */
+    static final class SharedScheduledExecutorService extends ForwardingExecutorService
+        implements ScheduledExecutorService {
+        private final ScheduledExecutorService delegate;
+
+        public SharedScheduledExecutorService(ScheduledExecutorService delegate) {
+            this.delegate = delegate;
+        }
+        @Override
+        protected ExecutorService delegate() {
+            return delegate;
+        }
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            return delegate.schedule(command, delay, unit);
+        }
+        @Override
+        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+            return delegate.schedule(callable, delay, unit);
+        }
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command,
+                long initialDelay, long period, TimeUnit unit) {
+            return delegate.scheduleAtFixedRate(command, initialDelay, period, unit);
+        }
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command,
+                long initialDelay, long delay, TimeUnit unit) {
+            return delegate.scheduleWithFixedDelay(command, initialDelay, delay, unit);
+        }
+        @Override
+        public void shutdown() {
+            throw new UnsupportedOperationException(
+                    "Cannot be shut down directly, close EtcdClient instead");
+        }
+        @Override
+        public List<Runnable> shutdownNow() {
+            throw new UnsupportedOperationException(
+                    "Cannot be shut down directly, close EtcdClient instead");
         }
     }
 

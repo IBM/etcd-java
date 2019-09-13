@@ -125,6 +125,10 @@ public class GrpcClient {
         return ses;
     }
 
+    /**
+     * Care should be taken not to use this executor for any blocking
+     * or CPU intensive tasks.
+     */
     public ScheduledExecutorService getInternalExecutor() {
         return ses;
     }

@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client.utils;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.ibm.etcd.client.GrpcClient.waitFor;
 
 import com.ibm.etcd.api.ResponseOp;
@@ -42,19 +43,23 @@ import java.util.stream.Stream;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.Iterators;
+import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
+import com.ibm.etcd.client.FutureListener;
 import com.ibm.etcd.client.GrpcClient;
 import com.ibm.etcd.client.KeyUtils;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.kv.WatchUpdate;
+import com.ibm.etcd.client.kv.KvClient.FluentWatchRequest;
 import com.ibm.etcd.client.kv.KvClient.Watch;
 import com.ibm.etcd.client.utils.RangeCache.Listener.EventType;
 import com.ibm.etcd.client.watch.RevisionCompactedException;
@@ -146,8 +151,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * automatically populate and update its internal state.
      * 
      * @return a future which completes when the cache is fully
-     *    initialized - i.e. its contents reflects the state of the
-     *    range at or after the time this method was called
+     *    initialized - i.e. when its contents reflects the state of
+     *    the range at or after the time this method was called
      */
     public synchronized ListenableFuture<Boolean> start() {
         if (closed) {
@@ -161,16 +166,15 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
     // internal method - should not be called while watch is active
     protected ListenableFuture<Boolean> fullRefreshCache() {
-        Executor executor = MoreExecutors.directExecutor();
         ListenableFuture<List<RangeResponse>> rrfut;
         long seenUpTo = seenUpToRev;
         boolean firstTime = (seenUpTo == 0L);
         if (firstTime || entries.size() <= 20) {
-            //TODO *maybe* chunking (for large caches), and maybe handle compaction (OUT_OF_RANGE response)
+            //TODO *maybe* chunking (for large caches)
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
-            rrfut = Futures.transform(rrf, Collections::singletonList, executor);
+            rrfut = Futures.transform(rrf, Collections::singletonList, directExecutor());
         } else {
             // in case the local cache is large, reduce data transfer by requesting
             // just keys, and full key+value only for those modified since seenUpToRev
@@ -187,104 +191,180 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             rrfut = Futures.transform(trf,
                     tr -> tr.getResponsesList().stream()
                         .map(ResponseOp::getResponseRange)
-                        .collect(Collectors.toList()), executor);
+                        .collect(Collectors.toList()), directExecutor());
         }
+        
+        final SettableFuture<Boolean> promise = new SettableFuture<Boolean>() {
+            @Override
+            protected void interruptTask() {
+                if (rrfut.cancel(true)) {
+                    return;
+                }
+                Watch theWatch;
+                synchronized(RangeCache.this) {
+                    theWatch = watch;
+                }
+                if (theWatch != null) {
+                    theWatch.close();
+                }
+            }
+        };
+        Futures.addCallback(rrfut, (FutureListener<List<RangeResponse>>) (rrs, err) -> {
+            if (rrs != null) try {
+                setupWatch(rrs, firstTime, promise);
+                return;
+            } catch (Throwable t) {
+                err = t;
+            }
+            promise.setException(err);
+        }, listenerExecutor);
 
-        return Futures.transformAsync(rrfut, rrs -> {
+        return promise;
+    }
+
+    private void setupWatch(List<RangeResponse> rrs, boolean firstTime, SettableFuture<Boolean> promise) {
+        if (closed) {
+            throw new CancellationException();
+        }
+        Set<ByteString> snapshot = firstTime && entries.isEmpty() ? null : new HashSet<>();
+        RangeResponse toUpdate = rrs.get(0);
+        if (toUpdate.getKvsCount() > 0) {
+            for (KeyValue kv : toUpdate.getKvsList()) {
+                if (snapshot != null) {
+                    snapshot.add(kv.getKey());
+                }
+                offerUpdate(kv, true);
+            }
+        }
+        long snapshotRev = toUpdate.getHeader().getRevision();
+        if (firstTime) {
+            notifyListeners(EventType.INITIALIZED, null, true);
+        }
+        if (snapshot != null) {
+            if (rrs.size() > 1) {
+                for (KeyValue kv : rrs.get(1).getKvsList()) {
+                    snapshot.add(kv.getKey());
+                }
+            }
+            // prune deleted entries
+            KeyValue.Builder kvBld = null;
+            for (ByteString key : entries.keySet()) {
+                if (!snapshot.contains(key)) {
+                    if (kvBld == null) {
+                        kvBld = KeyValue.newBuilder().setVersion(0L).setModRevision(snapshotRev);
+                    }
+                    offerUpdate(kvBld.setKey(key).build(), true);
+                }
+            }
+        }
+        revisionUpdate(snapshotRev);
+
+        StreamObserver<WatchUpdate> watchObserver = new StreamObserver<WatchUpdate>() {
+            @Override
+            public void onNext(WatchUpdate update) {
+                List<Event> events = update.getEvents();
+                int eventCount = events != null ? events.size() : 0;
+                if (eventCount > 0) {
+                    for (Event event : events) {
+                        KeyValue kv = event.getKv();
+//                      event.getPrevKv(); //TBD
+                        switch (event.getType()) {
+                        case DELETE:
+                            if (kv.getVersion() != 0L) {
+                                kv = KeyValue.newBuilder(kv).setVersion(0L)
+                                        .clearValue().build();
+                            }
+                            // fall-thru
+                        case PUT:
+                            offerUpdate(kv, true);
+                            break;
+                        case UNRECOGNIZED: default:
+                            logger.warn("Unrecognized event for key "
+                                    + kv.getKey().toStringUtf8());
+                            break;
+                        }
+                    }
+                }
+                revisionUpdate(eventCount == 0 ? update.getHeader().getRevision() - 1L
+                        : events.get(eventCount - 1).getKv().getModRevision());
+            }
+            @Override
+            public void onCompleted() {
+                // should only happen after external close()
+                if (!closed) {
+                    if (!client.isClosed()) {
+                        logger.error("Watch completed unexpectedly (not closed)");
+                    }
+                    close();
+                }
+            }
+            @Override
+            public void onError(Throwable t) {
+                if (closed) {
+                    promise.setException(new CancellationException());
+                    return;
+                }
+                boolean isDone = promise.isDone();
+                if (isDone && promise.isCancelled()) {
+                    return;
+                }
+                if (!(t instanceof RevisionCompactedException)) {
+                    logger.error("Watch failed with exception", t);
+                    promise.setException(t);
+                    return;
+                }
+                // Refresh the cache, which will renew the watch
+                ListenableFuture<Boolean> refresh;
+                if (isDone) {
+                    refresh = fullRefreshCache();
+                } else {
+                    // If this is a watch creation failure, delay the attempt for 1 second
+                    refresh = Futures.scheduleAsync(RangeCache.this::fullRefreshCache,
+                            1L, TimeUnit.SECONDS, client.internalScheduledExecutor());
+                    if (promise.setFuture(refresh)) {
+                        refresh = null;
+                    }
+                }
+                synchronized (RangeCache.this) {
+                    if (!closed) {
+                        if (refresh != null) {
+                            startFuture = refresh;
+                            refresh = null;
+                        }
+                        watch = null;
+                    }
+                }
+                if (refresh == null) {
+                    logger.warn("Performing full refresh following watch"
+                            + " compaction error: " + t);
+                } else {
+                    refresh.cancel(false);
+                }
+            }
+        };
+
+        FluentWatchRequest watchRequest = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
+                .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor);
+        synchronized (RangeCache.this) {
             if (closed) {
                 throw new CancellationException();
             }
-            Set<ByteString> snapshot = firstTime ? null : new HashSet<>();
-            RangeResponse toUpdate = rrs.get(0);
-            if (toUpdate.getKvsCount() > 0) {
-                for (KeyValue kv : toUpdate.getKvsList()) {
-                    if (!firstTime) {
-                        snapshot.add(kv.getKey());
-                    }
-                    offerUpdate(kv, true);
-                }
+            if (promise.isCancelled()) {
+                return;
             }
-            long snapshotRev = toUpdate.getHeader().getRevision();
-            if (firstTime) {
-                notifyListeners(EventType.INITIALIZED, null, true);
+            watch = watchRequest.start(watchObserver);
+        }
+        Futures.addCallback(watch, (FutureListener<Boolean>) (v, t) -> {
+            if (t != null) {
+                // Error cases are handled by onError above
+                return;
+            }
+            if (!Boolean.TRUE.equals(v) && closed) {
+                promise.setException(new CancellationException());
             } else {
-                if (rrs.size() > 1) {
-                    for (KeyValue kv : rrs.get(1).getKvsList()) {
-                        snapshot.add(kv.getKey());
-                    }
-                }
-                // prune deleted entries
-                KeyValue.Builder kvBld = null;
-                for (ByteString key : entries.keySet()) {
-                    if (!snapshot.contains(key)) {
-                        if (kvBld == null) {
-                            kvBld = KeyValue.newBuilder().setVersion(0L).setModRevision(snapshotRev);
-                        }
-                        offerUpdate(kvBld.setKey(key).build(), true);
-                    }
-                }
+                promise.set(v);
             }
-            revisionUpdate(snapshotRev);
-
-            Watch newWatch = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
-                    .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor)
-                    .start(new StreamObserver<WatchUpdate>() {
-                        @Override
-                        public void onNext(WatchUpdate update) {
-                            List<Event> events = update.getEvents();
-                            int eventCount = events != null ? events.size() : 0;
-                            if (eventCount > 0) {
-                                for (Event event : events) {
-                                    KeyValue kv = event.getKv();
-//                                  event.getPrevKv(); //TBD
-                                    switch (event.getType()) {
-                                    case DELETE:
-                                        if (kv.getVersion() != 0L) {
-                                            kv = KeyValue.newBuilder(kv).setVersion(0L)
-                                                    .clearValue().build();
-                                        }
-                                        // fall-thru
-                                    case PUT:
-                                        offerUpdate(kv, true);
-                                        break;
-                                    case UNRECOGNIZED: default:
-                                        logger.warn("Unrecognized event for key "
-                                                + kv.getKey().toStringUtf8());
-                                        break;
-                                    }
-                                }
-                            }
-                            revisionUpdate(eventCount == 0 ? update.getHeader().getRevision() - 1L
-                                    : events.get(eventCount - 1).getKv().getModRevision());
-                        }
-                        @Override
-                        public void onCompleted() {
-                            // should only happen after external close()
-                            if (!closed) {
-                                if (!client.isClosed()) {
-                                    logger.error("Watch completed unexpectedly (not closed)");
-                                }
-                                close();
-                            }
-                        }
-                        @Override
-                        public void onError(Throwable t) {
-                            logger.error("Watch failed with exception ", t);
-                            if (t instanceof RevisionCompactedException) synchronized (RangeCache.this) {
-                                // fail if happens during start, otherwise refresh
-                                if (!closed && startFuture != null && startFuture.isDone()) {
-                                    startFuture = fullRefreshCache(); // will renew watch
-                                }
-                            }
-                        }
-                    });
-            synchronized (this) {
-                if (closed) {
-                    throw new CancellationException();
-                }
-                return watch = newWatch;
-            }
-        }, listenerExecutor);
+        }, directExecutor());
     }
 
     // called only from listenerExecutor context
@@ -488,7 +568,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         //TODO -- async option
         RangeResponse rr = kvClient.get(key)
                 .serializable(weak).timeout(TIMEOUT_MS).sync();
-        KeyValue kv = rr.getCount() > 0 ? rr.getKvs(0) : null;
+        KeyValue kv = rr.getKvsCount() > 0 ? rr.getKvs(0) : null;
         return kv != null ? offerUpdate(kv, false)
                 : offerDelete(key, rr.getHeader().getRevision());
     }
@@ -895,4 +975,18 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         return closed;
     }
 
+    static class SettableFuture<V> extends AbstractFuture<V> {
+        @Override
+        public boolean set(@Nullable V value) {
+            return super.set(value);
+        }
+        @Override
+        public boolean setException(Throwable throwable) {
+            return super.setException(throwable);
+        }
+        @Override
+        public boolean setFuture(ListenableFuture<? extends V> future) {
+            return super.setFuture(future);
+        }
+    }
 }
