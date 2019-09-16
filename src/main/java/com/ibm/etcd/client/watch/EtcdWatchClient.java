@@ -152,13 +152,13 @@ public final class EtcdWatchClient implements Closeable {
             }
             watcherExecutor.execute(() -> {
                 try {
-                    //                  if (first) observer.onNext(new WatchUpdate(wr.getHeader(),
-                    //                          null, null, EventType.ESTABLISHED));
+//                  if (first) observer.onNext(new WatchUpdate(wr.getHeader(),
+//                          null, null, EventType.ESTABLISHED));
                     if (!vUserCancelled) {
                         observer.onNext(new EtcdWatchUpdate(wr));
                     }
                 } catch (RuntimeException e) {
-                    logger.warn("Watch observer onNext() threw", e);
+                    logger.warn("Watch observer onNext() threw (watchId = " + watchId + ")", e);
 
                     // must cancel the watch here per StreamObserver contract
                     cancel();
@@ -220,7 +220,7 @@ public final class EtcdWatchClient implements Closeable {
         public void processCancelledResponse(WatchResponse wr) {
             watchId = -1L;
             if (finished) {
-                logger.warn("Ignoring unexpected cancel response for watch "
+                logger.warn("Ignoring unexpected cancel response for watchId "
                         + wr.getWatchId() + ", reason=" + wr.getCancelReason());
                 return;
             }
@@ -232,12 +232,13 @@ public final class EtcdWatchClient implements Closeable {
                 ResponseHeader header = wr.getHeader();
                 long cRev = wr.getCompactRevision();
                 String reason = wr.getCancelReason();
+                long cancelledId = wr.getWatchId();
                 if (cRev != 0) {
-                    error = new RevisionCompactedException(header, reason, cRev);
+                    error = new RevisionCompactedException(header, cancelledId, reason, cRev);
                 } else if (wr.getCreated()) {
-                    error = new WatchCreateException(header, reason);
+                    error = new WatchCreateException(header, cancelledId, reason);
                 } else {
-                    error = new WatchCancelledException(header, reason);
+                    error = new WatchCancelledException(header, cancelledId, reason);
                 }
             }
             publishCompletionEvent(error);
@@ -516,7 +517,8 @@ public final class EtcdWatchClient implements Closeable {
             if (wrec != null) {
                 wrec.processWatchEvents(wr);
             } else {
-                logger.warn("State error: received response for unrecognized watcher: " + watchId);
+                logger.warn("State error: received response for unrecognized watchId "
+                        + watchId + ": " + wr);
                 sendCancel(watchId); // or maybe close/refresh stream
             }
         }

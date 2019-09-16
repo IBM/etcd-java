@@ -26,8 +26,9 @@ public class RevisionCompactedException extends WatchCancelledException {
 
     protected final long compactRevision;
 
-    RevisionCompactedException(ResponseHeader header, String reason, long compactRevision) {
-        super("Watch revision has been compacted, oldest available is " + compactRevision, header, reason);
+    RevisionCompactedException(ResponseHeader header, long watchId, String reason, long compactRevision) {
+        super("Watch revision has been compacted, oldest available is " + compactRevision,
+                header, watchId, reason);
         this.compactRevision = compactRevision;
     }
 

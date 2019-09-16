@@ -24,7 +24,7 @@ public class WatchCreateException extends WatchCancelledException {
 
     private static final long serialVersionUID = -1917127569298295828L;
 
-    WatchCreateException(ResponseHeader header, String reason) {
-        super("Watch creation failed", header, reason);
+    WatchCreateException(ResponseHeader header, long watchId, String reason) {
+        super("Watch creation failed", header, watchId, reason);
     }
 }

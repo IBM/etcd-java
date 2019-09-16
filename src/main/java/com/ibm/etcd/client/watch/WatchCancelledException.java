@@ -26,16 +26,19 @@ public class WatchCancelledException extends RuntimeException {
     private static final long serialVersionUID = 6922272835138905911L;
 
     protected final ResponseHeader header;
+    protected final long watchId;
     protected final String reason;
 
-    WatchCancelledException(String message, ResponseHeader header, String reason) {
-        super(message == null ? reason : (Strings.isNullOrEmpty(reason) ? message : (message + "; " + reason)));
+    WatchCancelledException(String message, ResponseHeader header, long watchId, String reason) {
+        super(message == null ? reason : (Strings.isNullOrEmpty(reason)
+                ? message : (message + "; " + reason)) + " (watchId = " + watchId + ")");
         this.header = header;
+        this.watchId = watchId;
         this.reason = reason;
     }
 
-    WatchCancelledException(ResponseHeader header, String reason) {
-        this("Watch was cancelled by the server unexpectedly", header, reason);
+    WatchCancelledException(ResponseHeader header, long watchId, String reason) {
+        this("Watch was cancelled by the server unexpectedly", header, watchId, reason);
     }
 
     /**
@@ -50,5 +53,12 @@ public class WatchCancelledException extends RuntimeException {
      */
     public String getReason() {
         return reason;
+    }
+
+    /**
+     * @return the internal id of the cancelled watch
+     */
+    public long getWatchId() {
+        return watchId;
     }
 }
