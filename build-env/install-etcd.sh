@@ -3,7 +3,7 @@
 # Fail on any error
 set -e
 
-ETCD_VERSION=v3.3.12
+ETCD_VERSION=v3.3.15
 
 INSTALL_DIR="${1:-$HOME/etcd}"
 
