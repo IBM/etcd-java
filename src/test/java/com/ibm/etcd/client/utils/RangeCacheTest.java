@@ -244,7 +244,7 @@ public class RangeCacheTest {
                 assertEquals(ls, rs);
 
                 // wait until connected and to catch up
-                rcClient.getKvClient().get(bs("tmp/"))
+                rcClient.getKvClient().get(bs("tmp2/"))
                 .deadline(Deadline.after(20, TimeUnit.SECONDS))
                 .backoffRetry().sync();
                 Thread.sleep(6_000L);
@@ -256,6 +256,30 @@ public class RangeCacheTest {
                 // check contents of cache == contents of local map
                 assertEquals(localMap.entrySet(), Sets.newHashSet(Iterables.transform(rc, kv
                         -> Maps.immutableEntry(kv.getKey(), kv.getValue()))));
+
+                directKv.put(bs("tmp2/abc-0"), bs("def")).sync();
+                directKv.delete(bs("tmp2/abc-1")).rangeEnd(bs("tmp2/abc-9")).sync();
+                Thread.sleep(300L); // ensure cache catches up
+                assertTrue(rc.keyExists(bs("tmp2/abc-0")));
+                prox.kill();
+                Thread.sleep(500L);
+                directKv.delete(bs("tmp2/abc-0")).sync();
+                for (i = 1; i < 8; i++) {
+                    directKv.put(bs("tmp2/abc-"+i), bs("def")).sync();
+                }
+                long rev = directKv.put(bs("tmp2/abc-8"), bs("def")).sync().getHeader().getRevision();
+                directKv.put(bs("tmp2/abc-9"), bs("def")).sync();
+                directKv.compact(rev, true).get();
+                Thread.sleep(500L);
+                // cache won't have seen the deletion yet
+                assertTrue(rc.keyExists(bs("tmp2/abc-0")));
+                System.out.println("starting after compaction");
+                prox.start();
+                Thread.sleep(5000L);
+                assertEquals(bs("def"), rc.get(bs("tmp2/abc-7")).getValue());
+                assertEquals(bs("def"), rc.get(bs("tmp2/abc-8")).getValue());
+                assertEquals(bs("def"), rc.get(bs("tmp2/abc-9")).getValue());
+                assertFalse(rc.keyExists(bs("tmp2/abc-0")));
             }
         }
     }

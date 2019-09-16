@@ -25,6 +25,8 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
+import com.ibm.etcd.api.CompactionRequest;
+import com.ibm.etcd.api.CompactionResponse;
 import com.ibm.etcd.api.Compare;
 import com.ibm.etcd.api.Compare.CompareResult;
 import com.ibm.etcd.api.Compare.CompareTarget;
@@ -604,5 +606,13 @@ public final class EtcdKvClient implements KvClient {
     @Override
     public FluentWatchRequest watch(ByteString key) {
         return new EtcdWatchRequest(key);
+    }
+
+    @Override
+    public ListenableFuture<CompactionResponse> compact(long minRevision, boolean physical) {
+        // 10 min timeout - caller can cancel if necessary
+        return client.call(KVGrpc.getCompactMethod(), CompactionRequest.newBuilder()
+                .setRevision(minRevision).setPhysical(physical).build(), true,
+                600_000L, null);
     }
 }

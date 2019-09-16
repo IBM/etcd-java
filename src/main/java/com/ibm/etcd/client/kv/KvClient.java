@@ -22,6 +22,7 @@ import java.util.concurrent.Executor;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
+import com.ibm.etcd.api.CompactionResponse;
 import com.ibm.etcd.api.DeleteRangeRequest;
 import com.ibm.etcd.api.DeleteRangeRequestOrBuilder;
 import com.ibm.etcd.api.DeleteRangeResponse;
@@ -141,8 +142,8 @@ public interface KvClient {
          * Supported in versions &gt;= 3.3 only
          */
         FTO subTxn(TxnRequestOrBuilder txnReq);
-        default FTO and() { return (FTO)this; }
-        default FTO noop() { return (FTO)this; }
+        default FTO and() { return (FTO) this; }
+        default FTO noop() { return (FTO) this; }
     }
 
     interface FluentTxnSuccOps extends FluentTxnOps<FluentTxnSuccOps> {
@@ -322,4 +323,13 @@ public interface KvClient {
      */
     FluentWatchRequest watch(ByteString key);
 
+    /**
+     * Perform a compaction.
+     * 
+     * @param minRevision the lowest revision to retain in the kv store history
+     * @param physical if true the request will not return until the compaction is
+     *     physically applied to the local database such that compacted entries are
+     *     totally removed from the backend database
+     */
+    ListenableFuture<CompactionResponse> compact(long minRevision, boolean physical);
 }
