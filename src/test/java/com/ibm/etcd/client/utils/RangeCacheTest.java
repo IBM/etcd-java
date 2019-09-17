@@ -20,6 +20,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.util.HashMap;
 import java.util.Iterator;
@@ -275,11 +276,24 @@ public class RangeCacheTest {
                 assertTrue(rc.keyExists(bs("tmp2/abc-0")));
                 System.out.println("starting after compaction");
                 prox.start();
-                Thread.sleep(5000L);
-                assertEquals(bs("def"), rc.get(bs("tmp2/abc-7")).getValue());
-                assertEquals(bs("def"), rc.get(bs("tmp2/abc-8")).getValue());
-                assertEquals(bs("def"), rc.get(bs("tmp2/abc-9")).getValue());
-                assertFalse(rc.keyExists(bs("tmp2/abc-0")));
+                // wait for cache to be refreshed
+                for (i = 1; i <= 20; i++) {
+                    Thread.sleep(1000L);
+                    KeyValue kv1 = rc.get(bs("tmp2/abc-7"));
+                    KeyValue kv2 = rc.get(bs("tmp2/abc-8"));
+                    KeyValue kv3 = rc.get(bs("tmp2/abc-9"));
+                    boolean exists = rc.keyExists(bs("tmp2/abc-0"));
+                    if (kv1 == null || kv2 == null || kv3 == null || exists) {
+                        if (i == 20) {
+                            fail("Cache did not catch up");
+                        }
+                        continue;
+                    }
+                    assertEquals(bs("def"), kv1.getValue());
+                    assertEquals(bs("def"), kv2.getValue());
+                    assertEquals(bs("def"), kv3.getValue());
+                    break;
+                }
             }
         }
     }
