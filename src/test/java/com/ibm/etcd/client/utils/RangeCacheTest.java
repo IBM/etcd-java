@@ -15,6 +15,9 @@
  */
 package com.ibm.etcd.client.utils;
 
+import static com.ibm.etcd.client.KeyUtils.fromHexString;
+import static com.ibm.etcd.client.KeyUtils.plusOne;
+import static com.ibm.etcd.client.KeyUtils.toHexString;
 import static com.ibm.etcd.client.KvTest.bs;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -24,6 +27,7 @@ import static org.junit.Assert.fail;
 
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -37,7 +41,10 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.api.KeyValue;
+import com.ibm.etcd.api.RangeRequest.SortOrder;
+import com.ibm.etcd.api.RangeRequest.SortTarget;
 import com.ibm.etcd.client.EtcdClient;
+import com.ibm.etcd.client.KeyUtils;
 import com.ibm.etcd.client.LocalNettyProxy;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.kv.KvClient.FluentTxnOps;
@@ -106,6 +113,38 @@ public class RangeCacheTest {
             }
         }
     }
+
+   @Test
+    public void testOrdering() throws Exception {
+        KvClient kvc = client.getKvClient();
+        ByteString px = bs("tmp1/"), val = bs("val");
+        kvc.delete(px).asPrefix().sync();
+
+        try (RangeCache rc = new RangeCache(client, px, true)) {
+            rc.put(px.concat(fromHexString("ff")), val);
+            rc.put(px.concat(fromHexString("02")), val);
+            rc.put(px.concat(fromHexString("01")), val);
+            rc.put(px.concat(fromHexString("0100")), val);
+            rc.put(px.concat(fromHexString("00ff")), val);
+            rc.put(px.concat(fromHexString("0101ab")), val);
+            rc.put(px.concat(plusOne(fromHexString("01"))), val);
+
+            List<KeyValue> directFromServer = kvc.get(px).asPrefix()
+                    .sorted(SortTarget.KEY, SortOrder.ASCEND)
+                    .sync().getKvsList();
+
+            printKeys(directFromServer);
+            printKeys(rc);
+            System.out.println("--------");
+
+            assertTrue(Iterables.elementsEqual(rc, directFromServer));
+        }
+    }
+   
+   private static void printKeys(Iterable<KeyValue> list) {
+       System.out.println("--------");
+       list.forEach(kv -> System.out.println(toHexString(kv.getKey())));
+   }
 
     @Test
     public void testBasics() throws Exception {

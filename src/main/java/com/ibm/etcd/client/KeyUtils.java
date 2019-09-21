@@ -39,13 +39,13 @@ public class KeyUtils {
     }
 
     public static ByteString singleByte(int b) {
-        return UnsafeByteOperations.unsafeWrap(new byte[]{(byte)b});
+        return UnsafeByteOperations.unsafeWrap(new byte[] { (byte) b });
     }
 
     public static int compareByteStrings(ByteString bs1, ByteString bs2) {
         int s1 = bs1.size(), s2 = bs2.size(), n = Math.min(s1, s2);
         for (int i = 0; i < n; i++) {
-            int cmp = Byte.compare(bs1.byteAt(i), bs2.byteAt(i));
+            int cmp = (bs1.byteAt(i) & 0xff) - (bs2.byteAt(i) & 0xff);
             if (cmp != 0) {
                 return cmp;
             }
@@ -55,6 +55,46 @@ public class KeyUtils {
 
     public static ByteString bs(String str) {
         return str != null ? ByteString.copyFromUtf8(str) : null;
+    }
+
+    private static final String HEX_CHARS_STR = "0123456789abcdef";
+    private static final char[] HEX_CHARS = HEX_CHARS_STR.toCharArray();
+
+    public static String toHexString(ByteString bs) {
+        int len = bs.size();
+        if (len == 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(len << 1);
+        for (int i = 0; i < len; i++) {
+            int b = bs.byteAt(i);
+            sb.append(HEX_CHARS[(b >> 4) & 0xf]).append(HEX_CHARS[b & 0xf]);
+        }
+        return sb.toString();
+    }
+
+    public static ByteString fromHexString(CharSequence seq) {
+        int len = seq.length();
+        if (len == 0) {
+            return ByteString.EMPTY;
+        }
+        if (len % 2 != 0) {
+            throw new IllegalArgumentException("must be even number of chars");
+        }
+        int blen = len >> 1;
+        byte[] bytes = new byte[blen];
+        for (int i = 0, j = 0; i < blen; i ++, j += 2) {
+            bytes[i] = (byte) ((digitFor(seq.charAt(j)) << 4) | digitFor(seq.charAt(j + 1)));
+        }
+        return UnsafeByteOperations.unsafeWrap(bytes);
+    }
+
+    private static int digitFor(char c) {
+        int d = HEX_CHARS_STR.indexOf(Character.toLowerCase(c));
+        if (d == -1) {
+            throw new IllegalArgumentException("invalid char: " + c);
+        }
+        return d;
     }
 
     //TODO other stuff for namespaces etc
