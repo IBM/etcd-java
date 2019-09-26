@@ -55,7 +55,7 @@
    </distributionManagement>
 
    <properties>
-      <grpc-version>1.23.0</grpc-version>
+      <grpc-version>1.24.0</grpc-version>
       <netty-version>4.1.38.Final</netty-version>
       <netty-tcnative-version>2.0.25.Final</netty-tcnative-version>
       <protoc-version>3.9.0</protoc-version>
