@@ -34,6 +34,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import javax.net.ssl.SSLException;
@@ -79,6 +80,7 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.concurrent.FastThreadLocalThread;
 
 public class EtcdClient implements KvStoreClient {
@@ -113,7 +115,8 @@ public class EtcdClient implements KvStoreClient {
     private volatile PersistentLease sessionLease; // lazy-instantiated
 
     public static class Builder {
-        final private NettyChannelBuilder chanBuilder;
+        private final NettyChannelBuilder chanBuilder;
+        private SslContextBuilder sslContextBuilder;
         private ByteString name, password;
         private long defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
         private boolean preemptAuth;
@@ -166,6 +169,11 @@ public class EtcdClient implements KvStoreClient {
             return this;
         }
 
+        private SslContextBuilder sslBuilder() {
+            return sslContextBuilder != null ? sslContextBuilder
+                    : (sslContextBuilder = GrpcSslContexts.forClient());
+        }
+
         public Builder withPlainText() {
             chanBuilder.usePlaintext();
             return this;
@@ -173,13 +181,20 @@ public class EtcdClient implements KvStoreClient {
 
         public Builder withCaCert(ByteSource certSource) throws IOException, SSLException {
             try (InputStream cert = certSource.openStream()) {
-                chanBuilder.sslContext(GrpcSslContexts.forClient().trustManager(cert).build());
+                chanBuilder.sslContext(sslBuilder().trustManager(cert).build());
             }
             return this;
         }
 
         public Builder withTrustManager(TrustManagerFactory tmf) throws SSLException {
-            chanBuilder.sslContext(GrpcSslContexts.forClient().trustManager(tmf).build());
+            chanBuilder.sslContext(sslBuilder().trustManager(tmf).build());
+            return this;
+        }
+
+        public Builder withTlsConfig(Consumer<SslContextBuilder> contextBuilder) throws SSLException {
+            SslContextBuilder sslBuilder = sslBuilder();
+            contextBuilder.accept(sslBuilder);
+            chanBuilder.sslContext(sslBuilder.build());
             return this;
         }
 

@@ -289,7 +289,7 @@ public class WatchTest {
                 }
 
                 p.arrive();
-                p.awaitAdvanceInterruptibly(0, 8, TimeUnit.SECONDS);
+                p.awaitAdvanceInterruptibly(0, 10, TimeUnit.SECONDS);
 
                 System.out.println("created " + i + " watches; left incomplete: " + watchedKeys.size());
 
