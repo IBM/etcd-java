@@ -157,8 +157,15 @@ public class GrpcClient {
                 && status.getDescription().startsWith("Channel closed"));
     };
 
-    static final RetryDecision<?> NON_IDEMP = (t,r) ->
-        codeFromThrowable(t) == Code.UNAVAILABLE && isConnectException(t);
+    static final RetryDecision<?> NON_IDEMP = (t,r) -> {
+        Status status = Status.fromThrowable(t);
+        Code code = status != null ? status.getCode() : null;
+        return (code == Code.UNAVAILABLE && isConnectException(t))
+                || (code == Code.UNKNOWN && status.getDescription() != null
+                // This *should* have RESOURCE_EXHAUSTED code, but it doesn't
+                // seem to come through that way, at least on etcd versions up to 3.3.17
+                && status.getDescription().contains("etcdserver: too many requests"));
+    };
 
     @SuppressWarnings("unchecked")
     public static <R> RetryDecision<R> retryDecision(boolean idempotent) {

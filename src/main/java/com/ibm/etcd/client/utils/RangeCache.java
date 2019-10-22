@@ -37,6 +37,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -120,8 +121,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     // after a delete that it precedes
     private final NavigableSet<KeyValue> deletionQueue;
 
-    // non-volatile - visibility ensured via adjacent access of entries map
-    private long seenUpToRev = 0L;
+    // Modified only from listenerExecutor context
+    private final AtomicLong seenUpToRev = new AtomicLong(0L);
 
     public RangeCache(EtcdClient client, ByteString prefix) {
         this(client, prefix, false);
@@ -167,7 +168,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     // internal method - should not be called while watch is active
     protected ListenableFuture<Boolean> fullRefreshCache() {
         ListenableFuture<List<RangeResponse>> rrfut;
-        long seenUpTo = seenUpToRev;
+        long seenUpTo = seenUpToRev.get();
         boolean firstTime = (seenUpTo == 0L);
         if (firstTime || entries.size() <= 20) {
             //TODO *maybe* chunking (for large caches)
@@ -222,6 +223,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         return promise;
     }
 
+    // called only from listenerExecutor context
     private void setupWatch(List<RangeResponse> rrs, boolean firstTime, SettableFuture<Boolean> promise) {
         if (closed) {
             throw new CancellationException();
@@ -293,7 +295,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 // should only happen after external close()
                 if (!closed) {
                     if (!client.isClosed()) {
-                        logger.error("Watch completed unexpectedly (not closed)");
+                        logger.warn("Watch completed unexpectedly (not closed) (fromKey = "
+                                + fromKey.toStringUtf8() + ")");
                     }
                     close();
                 }
@@ -304,12 +307,14 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     promise.setException(new CancellationException());
                     return;
                 }
+                assert startFuture == promise;
                 boolean isDone = promise.isDone();
                 if (isDone && promise.isCancelled()) {
                     return;
                 }
                 if (!(t instanceof RevisionCompactedException)) {
-                    logger.error("Watch failed with exception", t);
+                    logger.error("Watch failed with exception (fromKey = " +
+                            fromKey.toStringUtf8() + ")", t);
                     promise.setException(t);
                     return;
                 }
@@ -335,9 +340,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     }
                 }
                 if (refresh == null) {
-                    logger.warn("Performing full refresh following watch"
-                            + " compaction error: " + t);
+                    logger.warn("Performing full refresh (fromKey = " + fromKey.toStringUtf8() +
+                            ") following watch compaction error: " + t);
                 } else {
+                    assert closed;
                     refresh.cancel(false);
                 }
             }
@@ -345,6 +351,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
         FluentWatchRequest watchRequest = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
                 .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor);
+
+        Watch newWatch;
         synchronized (RangeCache.this) {
             if (closed) {
                 throw new CancellationException();
@@ -352,10 +360,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             if (promise.isCancelled()) {
                 return;
             }
-            watch = watchRequest.start(watchObserver);
+            watch = newWatch = watchRequest.start(watchObserver);
         }
-        Futures.addCallback(watch, (FutureListener<Boolean>) (v, t) -> {
-            if (t != null) {
+        Futures.addCallback(newWatch, (FutureListener<Boolean>) (v, t) -> {
+            if (t != null && !newWatch.isCancelled()) {
                 // Error cases are handled by onError above
                 return;
             }
@@ -369,10 +377,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
     // called only from listenerExecutor context
     protected void revisionUpdate(long upToRev) {
-        if (seenUpToRev >= upToRev) {
+        if (seenUpToRev.get() >= upToRev) {
             return;
         }
-        seenUpToRev = upToRev;
+        seenUpToRev.lazySet(upToRev);
 
         // process deletion queue up to upToRec
         if (deletionQueue.isEmpty()) {
@@ -457,7 +465,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
 
     /**
-     * assumed to <b>not</b> be called from watch/listener executor
+     * Assumed to <b>not</b> be called from watch/listener executor
      * 
      * @return <b>latest</b> value, may or may not be the provided one
      */
@@ -473,7 +481,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      */
     protected KeyValue offerUpdate(final KeyValue keyValue, boolean watchThread) {
         final long modRevision = keyValue.getModRevision();
-        if (modRevision <= seenUpToRev) {
+        if (modRevision <= seenUpToRev.get()) {
             return kvOrNullIfDeleted(keyValue);
         }
         final ByteString key = keyValue.getKey();
@@ -509,14 +517,13 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                         notifyListeners(EventType.DELETED, existKv, watchThread);
                     }
                     return null;
-                } else {
-                    // added or updated
-                    notifyListeners(EventType.UPDATED, keyValue, false);
-                    return keyValue;
                 }
+                // added or updated
+                notifyListeners(EventType.UPDATED, keyValue, false);
+                return keyValue;
             }
             // here existKv == null
-            if (modRevision <= seenUpToRev) {
+            if (modRevision <= seenUpToRev.get()) {
                 return null;
             }
             if ((existKv = entries.putIfAbsent(key, keyValue)) == null) {
@@ -524,10 +531,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 if (isDeleted) {
                     deletionQueue.add(keyValue);
                     return null;
-                } else {
-                    notifyListeners(EventType.UPDATED, keyValue, false);
-                    return keyValue;
                 }
+                notifyListeners(EventType.UPDATED, keyValue, false);
+                return keyValue;
             }
         }
     }
@@ -848,8 +854,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * @return an {@link Iterator} over the {@link KeyValue}s of this cache
      */
     public Iterator<KeyValue> strongIterator() {
-        entries.get(fromKey); // memory barrier prior to reading seenUpToRev
-        long seenUpTo = seenUpToRev;
+        long seenUpTo = seenUpToRev.get();
 
         if (seenUpTo == 0L) {
             ListenableFuture<Boolean> startFut;
@@ -863,7 +868,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             } else try {
                 startFut.get(2L, TimeUnit.MINUTES);
                 // now started
-                seenUpTo = seenUpToRev;
+                seenUpTo = seenUpToRev.get();
             } catch (TimeoutException te) {
                 throw Status.DEADLINE_EXCEEDED.asRuntimeException();
             } catch (ExecutionException e) {
@@ -911,7 +916,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         }
 
         long revNow = txnResp.getHeader().getRevision();
-        if (revNow > seenUpToRev) {
+        if (revNow > seenUpToRev.get()) {
             RangeResponse newModKvs = txnResp.getResponses(0).getResponseRange();
             List<KeyValue> otherKeys;
             if (txnResp.getResponsesCount() == 2) {
@@ -945,7 +950,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 newModKvs.getKvsList().forEach(kv -> offerUpdate(kv, false));
             }
 
-            if (revNow > seenUpToRev) {
+            if (revNow > seenUpToRev.get()) {
                 listenerExecutor.execute(() -> revisionUpdate(revNow));
             }
         }
@@ -962,8 +967,10 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 watch.close();
             } else {
                 startFuture.addListener(() -> {
-                    if (watch != null) {
-                        watch.close();
+                    synchronized (RangeCache.this) {
+                        if (watch != null) {
+                            watch.close();
+                        }
                     }
                 }, MoreExecutors.directExecutor());
             }

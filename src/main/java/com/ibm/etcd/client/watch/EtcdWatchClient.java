@@ -391,7 +391,7 @@ public final class EtcdWatchClient implements Closeable {
             if (requestStream != null && activeWatchers.isEmpty() && pendingCreate.isEmpty()) {
                 //TODO probably later change to use ClientCallStreamObserver.cancel()
                 requestStream.onError(CANCEL_EXCEPTION);
-                logger.debug("Watch stream cancelled due to there being no active watches");
+                logger.info("Watch stream cancelled due to there being no active watches");
                 requestStream = null;
             }
         }

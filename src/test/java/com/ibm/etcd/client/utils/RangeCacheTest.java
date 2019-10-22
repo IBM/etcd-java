@@ -30,6 +30,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -41,10 +42,10 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.api.KeyValue;
+import com.ibm.etcd.api.PutResponse;
 import com.ibm.etcd.api.RangeRequest.SortOrder;
 import com.ibm.etcd.api.RangeRequest.SortTarget;
 import com.ibm.etcd.client.EtcdClient;
-import com.ibm.etcd.client.KeyUtils;
 import com.ibm.etcd.client.LocalNettyProxy;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.kv.KvClient.FluentTxnOps;
@@ -147,6 +148,37 @@ public class RangeCacheTest {
    }
 
     @Test
+    public void testCompaction() throws Exception {
+        KvClient kvc = client.getKvClient();
+
+        Thread noise = new Thread() {
+            @Override
+            public void run() {
+                ByteString n = bs("/tmp/noise-");
+                ByteString k = n.concat(bs("0"));
+                for (int i = 0; i < 1000; i++) {
+                    kvc.delete(k).sync();
+                    k = n.concat(bs("" + i));
+                    PutResponse pr = kvc.put(k, n).sync();
+                    if (i == 500) {
+                        kvc.compact(pr.getHeader().getRevision(), false);
+                    }
+                }
+            }
+        };
+        
+        try (RangeCache rc = new RangeCache(client, bs("tmp/"), false)) {
+
+            rc.start().get(1L, TimeUnit.SECONDS);
+
+                    noise.start();
+                    noise.join();
+        }
+
+
+    }
+
+    @Test
     public void testBasics() throws Exception {
 
         KvClient kvc = client.getKvClient();
@@ -208,7 +240,12 @@ public class RangeCacheTest {
                 .withPlainText().build();
                 RangeCache rc = new RangeCache(rcClient, bs("tmp2/"), false)) {
 
-            rc.start();
+            try {
+                // this won't finish starting because it's not connected
+                rc.start().get(500, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+                // ok
+            }
 
             Map<ByteString,ByteString> localMap = new HashMap<>();
 
@@ -297,44 +334,56 @@ public class RangeCacheTest {
                 assertEquals(localMap.entrySet(), Sets.newHashSet(Iterables.transform(rc, kv
                         -> Maps.immutableEntry(kv.getKey(), kv.getValue()))));
 
-                directKv.put(bs("tmp2/abc-0"), bs("def")).sync();
-                directKv.delete(bs("tmp2/abc-1")).rangeEnd(bs("tmp2/abc-9")).sync();
-                Thread.sleep(300L); // ensure cache catches up
-                assertTrue(rc.keyExists(bs("tmp2/abc-0")));
-                prox.kill();
-                Thread.sleep(500L);
-                directKv.delete(bs("tmp2/abc-0")).sync();
-                for (i = 1; i < 8; i++) {
-                    directKv.put(bs("tmp2/abc-"+i), bs("def")).sync();
-                }
-                long rev = directKv.put(bs("tmp2/abc-8"), bs("def")).sync().getHeader().getRevision();
-                directKv.put(bs("tmp2/abc-9"), bs("def")).sync();
-                directKv.compact(rev, true).get();
-                Thread.sleep(500L);
-                // cache won't have seen the deletion yet
-                assertTrue(rc.keyExists(bs("tmp2/abc-0")));
-                System.out.println("starting after compaction");
-                prox.start();
-                // wait for cache to be refreshed
-                for (i = 1; i <= 20; i++) {
-                    Thread.sleep(1000L);
-                    KeyValue kv1 = rc.get(bs("tmp2/abc-7"));
-                    KeyValue kv2 = rc.get(bs("tmp2/abc-8"));
-                    KeyValue kv3 = rc.get(bs("tmp2/abc-9"));
-                    boolean exists = rc.keyExists(bs("tmp2/abc-0"));
-                    if (kv1 == null || kv2 == null || kv3 == null || exists) {
-                        if (i == 20) {
-                            fail("Cache did not catch up");
-                        }
-                        continue;
-                    }
-                    assertEquals(bs("def"), kv1.getValue());
-                    assertEquals(bs("def"), kv2.getValue());
-                    assertEquals(bs("def"), kv3.getValue());
-                    break;
-                }
+                testOfflineCompact(directKv, rc, prox);
+                // Test compact recovery twice
+                testOfflineCompact(directKv, rc, prox);
             }
         }
+    }
+
+    private void testOfflineCompact(KvClient directKv, RangeCache rc, LocalNettyProxy prox) throws Exception {
+        int i;
+        directKv.delete(bs("tmp2/aftercompact")).sync();
+        directKv.put(bs("tmp2/abc-0"), bs("def")).sync();
+        directKv.delete(bs("tmp2/abc-1")).rangeEnd(bs("tmp2/abc-9")).sync();
+        Thread.sleep(300L); // ensure cache catches up
+        assertTrue(rc.keyExists(bs("tmp2/abc-0")));
+        prox.kill();
+        Thread.sleep(500L);
+        directKv.delete(bs("tmp2/abc-0")).sync();
+        for (i = 1; i < 8; i++) {
+            directKv.put(bs("tmp2/abc-"+i), bs("def")).sync();
+        }
+        long rev = directKv.put(bs("tmp2/abc-8"), bs("def")).sync().getHeader().getRevision();
+        directKv.put(bs("tmp2/abc-9"), bs("def")).sync();
+        directKv.compact(rev, true).get();
+        Thread.sleep(500L);
+        // cache won't have seen the deletion yet
+        assertTrue(rc.keyExists(bs("tmp2/abc-0")));
+        System.out.println("starting after compaction");
+        prox.start();
+        // wait for cache to be refreshed
+        for (i = 1; i <= 20; i++) {
+            Thread.sleep(1000L);
+            KeyValue kv1 = rc.get(bs("tmp2/abc-7"));
+            KeyValue kv2 = rc.get(bs("tmp2/abc-8"));
+            KeyValue kv3 = rc.get(bs("tmp2/abc-9"));
+            boolean exists = rc.keyExists(bs("tmp2/abc-0"));
+            if (kv1 == null || kv2 == null || kv3 == null || exists) {
+                if (i == 20) {
+                    fail("Cache did not catch up");
+                }
+                continue;
+            }
+            assertEquals(bs("def"), kv1.getValue());
+            assertEquals(bs("def"), kv2.getValue());
+            assertEquals(bs("def"), kv3.getValue());
+            break;
+        }
+
+        directKv.put(bs("tmp2/aftercompact"), bs("val2")).sync();
+        Thread.sleep(100L);
+        assertEquals(bs("val2"), rc.get(bs("tmp2/aftercompact")).getValue());
     }
 
     @Test
