@@ -336,6 +336,7 @@ public class GrpcClient {
             ResilientResponseObserver<ReqT,RespT> respStream, Executor responseExecutor) {
         // must explicitly auth in stream case to ensure unauthenticated version isn't used
         if (refreshCreds != null && getCallOptions() == CallOptions.DEFAULT) {
+            // This will update callOptions with new CallCredentials prior to opening the stream
             authenticateNow();
         }
         return new ResilientBiDiStream<>(method, respStream, responseExecutor).start();
@@ -363,7 +364,7 @@ public class GrpcClient {
     }
 
 
-    class ResilientBiDiStream<ReqT,RespT> {
+    final class ResilientBiDiStream<ReqT,RespT> {
         private final MethodDescriptor<ReqT,RespT> method;
         private final ResilientResponseObserver<ReqT,RespT> respStream;
         private final Executor responseExecutor;
@@ -545,7 +546,7 @@ public class GrpcClient {
                     return;
                 }
 
-                // don't treat this as final if authentication
+                // Don't treat this as final if authentication
                 // is enabled and the error reflects that reauth
                 // is required - instead just cancel the "current"
                 // stream which will cause the top-level stream
@@ -592,13 +593,25 @@ public class GrpcClient {
                     finalError = !reauthed && !retryableStreamError(t);
                 }
                 if (!finalError) {
-                    int errCount = ++errCounter;
-                    String msg = "Retryable onError #" + errCount
-                            + " on underlying stream of method " + method.getFullMethodName();
-                    if (logger.isDebugEnabled()) {
-                        logger.info(msg, t);
+                    int errCount = -1;
+                    if (reauthed) {
+                        String msg = "Reauthenticating after auth error (likely expiry) on underlying"
+                                + " stream of method " + method.getFullMethodName();
+                        if (logger.isDebugEnabled()) {
+                            logger.info(msg, t);
+                        } else {
+                            Throwable cause = Throwables.getRootCause(t);
+                            logger.info(msg + ": " + cause.getClass().getName() + ": " + cause.getMessage());
+                        }
                     } else {
-                        logger.info(msg + ": " + t.getClass().getName() + ": " + t.getMessage());
+                        errCount = ++errCounter;
+                        String msg = "Retryable onError #" + errCount
+                                + " on underlying stream of method " + method.getFullMethodName();
+                        if (logger.isDebugEnabled()) {
+                            logger.info(msg, t);
+                        } else {
+                            logger.info(msg + ": " + t.getClass().getName() + ": " + t.getMessage());
+                        }
                     }
 
                     RequestSubStream userStreamBefore = userReqStream;

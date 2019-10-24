@@ -440,6 +440,7 @@ public final class EtcdWatchClient implements Closeable {
             onReplacedOrFailed(null, t instanceof Exception
                     ? (Exception) t : new RuntimeException(t));
         }
+
         void onReplacedOrFailed(StreamObserver<WatchRequest> newRequestStream, Exception err) {
             List<WatcherRecord> pending = null;
             synchronized (EtcdWatchClient.this) {
