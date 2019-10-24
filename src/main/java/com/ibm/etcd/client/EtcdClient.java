@@ -35,7 +35,6 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
@@ -52,6 +51,7 @@ import com.google.protobuf.ByteString;
 import com.ibm.etcd.api.AuthGrpc;
 import com.ibm.etcd.api.AuthenticateRequest;
 import com.ibm.etcd.api.AuthenticateResponse;
+import com.ibm.etcd.client.GrpcClient.AuthProvider;
 import com.ibm.etcd.client.kv.EtcdKvClient;
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.lease.EtcdLeaseClient;
@@ -283,14 +283,22 @@ public class EtcdClient implements KvStoreClient {
 
         this.channel = chanBuilder.build();
 
-        Predicate<Throwable> rr = name != null ? EtcdClient::reauthRequired : null;
-        Supplier<CallCredentials> rc = name != null ? this::refreshCredentials : null;
+        AuthProvider authProvider = name == null ? null : new AuthProvider() {
+            @Override
+            public boolean requiresReauth(Throwable t) {
+                return EtcdClient.reauthRequired(t);
+            }
+            @Override
+            public CallCredentials refreshCredentials() {
+                return EtcdClient.this.refreshCredentials();
+            }
+        };
 
         this.sharedInternalExecutor = new SharedScheduledExecutorService(internalExecutor);
-        this.grpc = new GrpcClient(channel, rr, rc, sharedInternalExecutor,
+        this.grpc = new GrpcClient(channel, authProvider, sharedInternalExecutor,
                 () -> Thread.currentThread() instanceof EtcdEventThread,
                 userExecutor, sendViaEventLoop, defaultTimeoutMs);
-        if (initialAuth) {
+        if (authProvider != null && initialAuth) {
             grpc.authenticateNow();
         }
 

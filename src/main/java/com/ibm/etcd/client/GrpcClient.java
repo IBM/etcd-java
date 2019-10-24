@@ -73,10 +73,18 @@ public class GrpcClient {
     private static final Logger logger = LoggerFactory.getLogger(GrpcClient.class);
 
     private final long defaultTimeoutMs;
+ 
+    public interface AuthProvider {
+        CallCredentials refreshCredentials();
+        boolean requiresReauth(Throwable t);
+    }
 
-    //TODO maybe combine these into an auth provider intface
-    private final Supplier<CallCredentials> refreshCreds;
-    private final Predicate<Throwable> reauthRequired;
+    private static final AuthProvider NO_AUTH = new AuthProvider() {
+        @Override public boolean requiresReauth(Throwable t) { return false; }
+        @Override public CallCredentials refreshCredentials() { throw new IllegalStateException(); }
+    };
+
+    private final AuthProvider authProvider;
 
     private final ManagedChannel channel;
 
@@ -98,18 +106,37 @@ public class GrpcClient {
     // modified only by reauthenticate() method
     private CallOptions callOptions = CallOptions.DEFAULT; // volatile tbd - lazy probably ok
 
-
-    //TODO whether some/all of the channel construction is moved in here
+    /**
+     * @deprecated use other constructor
+     */
+    @Deprecated
     public GrpcClient(ManagedChannel channel,
             Predicate<Throwable> reauthRequired,
             Supplier<CallCredentials> credsSupplier,
             ScheduledExecutorService executor, Condition isEventThread, 
             Executor userExecutor, boolean sendViaEventLoop, long defaultTimeoutMs) {
-        Preconditions.checkArgument((reauthRequired == null) == (credsSupplier == null),
-                "must supply both or neither reauth and creds");
+        this(channel, reauthRequired == null ? null : new AuthProvider() {
+            {
+                Preconditions.checkArgument((reauthRequired == null) == (credsSupplier == null),
+                        "must supply both or neither reauth and creds");
+            }
+            @Override
+            public boolean requiresReauth(Throwable t) {
+                return reauthRequired.apply(t);
+            }
+            @Override
+            public CallCredentials refreshCredentials() {
+                return credsSupplier.get();
+            }
+        }, executor, isEventThread, userExecutor, sendViaEventLoop, defaultTimeoutMs);
+    }
+
+    //TODO whether some/all of the channel construction is moved in here
+    public GrpcClient(ManagedChannel channel, AuthProvider authProvider,
+            ScheduledExecutorService executor, Condition isEventThread, 
+            Executor userExecutor, boolean sendViaEventLoop, long defaultTimeoutMs) {
         this.channel = channel;
-        this.refreshCreds = credsSupplier;
-        this.reauthRequired = reauthRequired;
+        this.authProvider = authProvider != null ? authProvider : NO_AUTH;
         this.ses = MoreExecutors.listeningDecorator(executor);
         this.isEventThread = isEventThread;
         this.userExecutor = userExecutor;
@@ -138,9 +165,8 @@ public class GrpcClient {
     }
 
     public void authenticateNow() {
-        if (refreshCreds != null) {
-            reauthenticate(getCallOptions());
-        }
+        assert authProvider != NO_AUTH;
+        reauthenticate(getCallOptions());
     }
 
     protected CallOptions getCallOptions() {
@@ -298,11 +324,11 @@ public class GrpcClient {
      * @return true if reauthentication was required and attempted
      */
     protected boolean reauthIfRequired(Throwable error, CallOptions callOpts) {
-        if (reauthRequired == null || !reauthRequired.apply(error)) {
-            return false;
+        if (authProvider.requiresReauth(error)) {
+            reauthenticate(callOpts);
+            return true;
         }
-        reauthenticate(callOpts);
-        return true;
+        return false;
     }
 
     public static boolean isConnectException(Throwable t) {
@@ -321,7 +347,7 @@ public class GrpcClient {
             synchronized (this) {
                 CallOptions callOpts = getCallOptions();
                 if (callOpts == failedOpts) {
-                    callOptions = callOpts.withCallCredentials(refreshCreds.get());
+                    callOptions = callOpts.withCallCredentials(authProvider.refreshCredentials());
                 }
             }
         }
@@ -335,7 +361,7 @@ public class GrpcClient {
     public <ReqT,RespT> StreamObserver<ReqT> callStream(MethodDescriptor<ReqT,RespT> method,
             ResilientResponseObserver<ReqT,RespT> respStream, Executor responseExecutor) {
         // must explicitly auth in stream case to ensure unauthenticated version isn't used
-        if (refreshCreds != null && getCallOptions() == CallOptions.DEFAULT) {
+        if (authProvider != NO_AUTH && getCallOptions() == CallOptions.DEFAULT) {
             // This will update callOptions with new CallCredentials prior to opening the stream
             authenticateNow();
         }
@@ -551,8 +577,7 @@ public class GrpcClient {
                 // is required - instead just cancel the "current"
                 // stream which will cause the top-level stream
                 // to be refreshed after a reauth is done
-                if (err == null || reauthRequired == null
-                        || !reauthRequired.apply(err)) {
+                if (err == null || !authProvider.requiresReauth(err)) {
                     error = err;
                     finished = true;
                 }
