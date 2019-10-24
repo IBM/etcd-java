@@ -302,12 +302,17 @@ public class EtcdClient implements KvStoreClient {
         if (leaseClient == CLOSED) {
             return;
         }
-        kvClient.close();
         synchronized (this) {
-            if (leaseClient instanceof EtcdLeaseClient) {
-                ((EtcdLeaseClient)leaseClient).close();
+            LeaseClient toClose = leaseClient;
+            if (toClose == CLOSED) {
+                return;
             }
             leaseClient = CLOSED;
+
+            kvClient.close();
+            if (toClose instanceof EtcdLeaseClient) {
+                ((EtcdLeaseClient) toClose).close();
+            }
         }
         // Wait until there are no outstanding non-future-scheduled tasks before
         // shutting down the channel. Then wait until the channel has terminated
