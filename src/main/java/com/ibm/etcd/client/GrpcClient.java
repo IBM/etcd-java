@@ -619,24 +619,22 @@ public class GrpcClient {
                 }
                 if (!finalError) {
                     int errCount = -1;
+                    String msg;
                     if (reauthed) {
-                        String msg = "Reauthenticating after auth error (likely expiry) on underlying"
+                        msg = "Reauthenticating after auth error (likely expiry) on underlying"
                                 + " stream of method " + method.getFullMethodName();
-                        if (logger.isDebugEnabled()) {
-                            logger.info(msg, t);
-                        } else {
-                            Throwable cause = Throwables.getRootCause(t);
-                            logger.info(msg + ": " + cause.getClass().getName() + ": " + cause.getMessage());
-                        }
                     } else {
                         errCount = ++errCounter;
-                        String msg = "Retryable onError #" + errCount
+                        msg = "Retryable onError #" + errCount
                                 + " on underlying stream of method " + method.getFullMethodName();
-                        if (logger.isDebugEnabled()) {
-                            logger.info(msg, t);
-                        } else {
-                            logger.info(msg + ": " + t.getClass().getName() + ": " + t.getMessage());
+                    }
+                    if (logger.isDebugEnabled()) {
+                        logger.info(msg, t);
+                    } else {
+                        if (reauthed) {
+                            t = Throwables.getRootCause(t);
                         }
+                        logger.info(msg + ": " + t.getClass().getName() + ": " + t.getMessage());
                     }
 
                     RequestSubStream userStreamBefore = userReqStream;
