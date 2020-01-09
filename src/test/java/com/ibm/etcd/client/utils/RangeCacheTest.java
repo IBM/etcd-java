@@ -341,6 +341,23 @@ public class RangeCacheTest {
         }
     }
 
+    @Test
+    public void testSizeStability() throws Exception {
+
+        directClient.getKvClient().delete(bs("tmp3/")).asPrefix().sync();
+
+        try (RangeCache rc = new RangeCache(directClient, bs("tmp3/"), false)) {
+            rc.start().get();
+            rc.put(bs("tmp3/key1"), bs("val1"));
+            rc.put(bs("tmp3/key2"), bs("val2"));
+            assertEquals(2, rc.size());
+            assertNull(rc.getRemote(bs("tmp3/key3")));
+            assertEquals(2, rc.size());
+            rc.put(bs("tmp3/key3"), bs("val3"));
+            assertEquals(3, rc.size());
+        }
+    }
+
     private void testOfflineCompact(KvClient directKv, RangeCache rc, LocalNettyProxy prox) throws Exception {
         int i;
         directKv.delete(bs("tmp2/aftercompact")).sync();

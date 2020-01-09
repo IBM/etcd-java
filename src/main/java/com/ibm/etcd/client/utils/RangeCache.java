@@ -376,7 +376,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     }
 
     // called only from listenerExecutor context
-    protected void revisionUpdate(long upToRev) {
+    protected void revisionUpdate(final long upToRev) {
         if (seenUpToRev.get() >= upToRev) {
             return;
         }
@@ -511,31 +511,37 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     continue; // update failed
                 }
                 // update succeeded
+                boolean deletionReplaced = isDeleted(existKv);
+                if (deletionReplaced) {
+                    deletionQueue.remove(existKv);
+                }
                 if (isDeleted) {
                     deletionQueue.add(keyValue);
-                    if (!isDeleted(existKv)) { // previous value
+                    if (!deletionReplaced) { // previous value
                         notifyListeners(EventType.DELETED, existKv, watchThread);
                     }
                     return null;
                 }
-                // added or updated
-                notifyListeners(EventType.UPDATED, keyValue, false);
-                return keyValue;
+                break; // added or updated
             }
             // here existKv == null
             if (modRevision <= seenUpToRev.get()) {
                 return null;
             }
+            //TODO in some cases it might be better to return null here
+            // when isDeleted == true, rather than inserting deletion record
+            // (e.g. when this comes from a getRemote() or keyExistsRemote() call)
             if ((existKv = entries.putIfAbsent(key, keyValue)) == null) {
                 // update succeeded
                 if (isDeleted) {
                     deletionQueue.add(keyValue);
                     return null;
                 }
-                notifyListeners(EventType.UPDATED, keyValue, false);
-                return keyValue;
+                break; // added
             }
         }
+        notifyListeners(EventType.UPDATED, keyValue, false);
+        return keyValue;
     }
 
     protected static KeyValue kvOrNullIfDeleted(KeyValue fromCache) {
@@ -588,7 +594,22 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     }
 
     public int size() {
-        return Math.max(0, entries.size() - deletionQueue.size());
+        int total = entries.size();
+        if (total > 0) {
+            // We need to exclude deletion records but can't just subtract
+            // deletionQueue.size() since it can contain "stale" records
+            // which persist until the next watch update flushes them
+            KeyValue deletion = deletionQueue.pollFirst();
+            while (deletion != null) {
+                if (entries.get(deletion.getKey()) != deletion) {
+                    deletionQueue.remove(deletion);
+                } else if (--total == 0) {
+                    return 0;
+                }
+                deletion = deletionQueue.higher(deletion);
+            }
+        }
+        return total;
     }
 
     //TODO maybe add sizeRemote() ?
