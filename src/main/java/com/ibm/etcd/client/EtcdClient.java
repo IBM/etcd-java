@@ -41,6 +41,7 @@ import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableSet;
@@ -64,6 +65,7 @@ import com.ibm.etcd.client.lock.LockClient;
 
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
+import io.grpc.Deadline;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
 import io.grpc.Metadata.Key;
@@ -82,6 +84,7 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.util.concurrent.FastThreadLocalThread;
 
@@ -131,18 +134,34 @@ public class EtcdClient implements KvStoreClient {
             this.chanBuilder = chanBuilder;
         }
 
+        /**
+         * Set etcd credentials to use from {@link ByteString}s
+         *
+         * @param name
+         * @param password
+         */
         public Builder withCredentials(ByteString name, ByteString password) {
             this.name = name;
             this.password = password;
             return this;
         }
 
+        /**
+         * Set etcd credentials to use from {@link String}s as UTF-8.
+         *
+         * @param name
+         * @param password
+         */
         public Builder withCredentials(String name, String password) {
             this.name = ByteString.copyFromUtf8(name);
             this.password = ByteString.copyFromUtf8(password);
             return this;
         }
 
+        /**
+         * Attempt authentication immediately rather than if/when required.
+         * Applies only if etcd credentials have been provided.
+         */
         public Builder withImmediateAuth() {
             preemptAuth = true;
             return this;
@@ -156,16 +175,41 @@ public class EtcdClient implements KvStoreClient {
             return this;
         }
 
+        /**
+         * Control whether all RPC requests are sent via the underlying
+         * IO event loop. This helps to limit overall memory use due to
+         * internal thread-local buffer pooling.
+         * <p>
+         * Default is <code>true</code>
+         *
+         * @param sendViaEventLoop
+         */
         public Builder sendViaEventLoop(boolean sendViaEventLoop) {
             this.sendViaEventLoop = sendViaEventLoop;
             return this;
         }
 
+        /**
+         * Provide executor to use for user call-backs. A default
+         * client-scoped executor will be used if not set.
+         *
+         * @param executor
+         */
         public Builder withUserExecutor(Executor executor) {
             this.executor = executor;
             return this;
         }
 
+        /**
+         * Provide a default timeout to use for requests made by this client.
+         * This timeout value is used per-attempt, unlike {@link Deadline}s
+         * used per-call which also cover any/all retry attempts.
+         * 
+         * The default for this default is 10 seconds
+         *
+         * @param value
+         * @param unit
+         */
         public Builder withDefaultTimeout(long value, TimeUnit unit) {
             this.defaultTimeoutMs = TimeUnit.MILLISECONDS.convert(value, unit);
             return this;
@@ -176,11 +220,21 @@ public class EtcdClient implements KvStoreClient {
                     : (sslContextBuilder = GrpcSslContexts.forClient());
         }
 
+        /**
+         * Disable TLS - to connect to insecure servers in development contexts
+         */
         public Builder withPlainText() {
             chanBuilder.usePlaintext();
             return this;
         }
 
+        /**
+         * Provide CA certificate to use for TLS connection
+         *
+         * @param certSource
+         * @throws IOException if there is an error reading from the provided {@link ByteSource}
+         * @throws SSLException
+         */
         public Builder withCaCert(ByteSource certSource) throws IOException, SSLException {
             try (InputStream cert = certSource.openStream()) {
                 chanBuilder.sslContext(sslBuilder().trustManager(cert).build());
@@ -188,11 +242,26 @@ public class EtcdClient implements KvStoreClient {
             return this;
         }
 
+        /**
+         * Provide custom {@link TrustManagerFactory} to use for this
+         * client's TLS connection.
+         *
+         * @param tmf
+         * @throws SSLException
+         */
         public Builder withTrustManager(TrustManagerFactory tmf) throws SSLException {
             chanBuilder.sslContext(sslBuilder().trustManager(tmf).build());
             return this;
         }
 
+        /**
+         * Configure the netty {@link SslContext} to be used by this client.
+         * The provided {@link Consumer} should make updates to the passed
+         * {@link SslContextBuilder} as needed, but should not call build().
+         *
+         * @param contextBuilder
+         * @throws SSLException
+         */
         public Builder withTlsConfig(Consumer<SslContextBuilder> contextBuilder) throws SSLException {
             SslContextBuilder sslBuilder = sslBuilder();
             contextBuilder.accept(sslBuilder);
@@ -200,19 +269,31 @@ public class EtcdClient implements KvStoreClient {
             return this;
         }
 
+        /**
+         * Set the session timeout in seconds - this corresponds to the TTL of the
+         * session lease, see {@link EtcdClient#getSessionLease()}.
+         *
+         * @param timeoutSecs
+         */
         public Builder withSessionTimeoutSecs(int timeoutSecs) {
-            if (timeoutSecs < 1) {
-                throw new IllegalArgumentException("invalid session timeout: " + timeoutSecs);
-            }
+            Preconditions.checkArgument(timeoutSecs < 1, "invalid session timeout: %s", timeoutSecs);
             this.sessTimeoutSecs = timeoutSecs;
             return this;
         }
 
+        /**
+         * Set the maximum inbound message size in bytes
+         *
+         * @param sizeInBytes
+         */
         public Builder withMaxInboundMessageSize(int sizeInBytes) {
             chanBuilder.maxInboundMessageSize(sizeInBytes);
             return this;
         }
 
+        /**
+         * @return the built {@link EtcdClient} instance
+         */
         public EtcdClient build() {
             return new EtcdClient(chanBuilder, defaultTimeoutMs, name, password,
                     preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
@@ -223,11 +304,22 @@ public class EtcdClient implements KvStoreClient {
         return Math.min(6, Runtime.getRuntime().availableProcessors());
     }
 
+    /**
+     * 
+     * @param host
+     * @param port
+     * @return
+     */
     public static Builder forEndpoint(String host, int port) {
         String target = GrpcUtil.authorityFromHostAndPort(host, port);
         return new Builder(NettyChannelBuilder.forTarget(target));
     }
 
+    /**
+     * 
+     * @param endpoints
+     * @return
+     */
     public static Builder forEndpoints(List<String> endpoints) {
         NettyChannelBuilder ncb = NettyChannelBuilder
                 .forTarget(StaticEtcdNameResolverFactory.ETCD)
@@ -235,6 +327,11 @@ public class EtcdClient implements KvStoreClient {
         return new Builder(ncb);
     }
 
+    /**
+     * 
+     * @param endpoints
+     * @return
+     */
     public static Builder forEndpoints(String endpoints) {
         return forEndpoints(Arrays.asList(endpoints.split(",")));
     }

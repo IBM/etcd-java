@@ -15,7 +15,6 @@
  */
 package com.ibm.etcd.client.kv;
 
-import static com.ibm.etcd.client.GrpcClient.waitFor;
 import static com.ibm.etcd.client.KeyUtils.ZERO_BYTE;
 
 import java.util.List;
@@ -109,7 +108,7 @@ public final class EtcdKvClient implements KvClient {
 
     @Override
     public TxnResponse txnSync(TxnRequest txn, long timeoutMillis) {
-        return waitFor(ex -> client.call(METHOD_TXN, txn, false, timeoutMillis, ex));
+        return client.waitForCall(ex -> client.call(METHOD_TXN, txn, false, timeoutMillis, ex));
     }
 
     @Override

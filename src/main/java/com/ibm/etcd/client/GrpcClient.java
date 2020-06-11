@@ -144,11 +144,11 @@ public class GrpcClient {
     public GrpcClient(ManagedChannel channel, AuthProvider authProvider,
             ScheduledExecutorService executor, Condition isEventThread, 
             Executor userExecutor, boolean sendViaEventLoop, long defaultTimeoutMs) {
-        this.channel = channel;
+        this.channel = Preconditions.checkNotNull(channel, "channel");
         this.authProvider = authProvider != null ? authProvider : NO_AUTH;
         this.ses = MoreExecutors.listeningDecorator(executor);
-        this.isEventThread = isEventThread;
-        this.userExecutor = userExecutor;
+        this.isEventThread = Preconditions.checkNotNull(isEventThread, "isEventThread");
+        this.userExecutor = Preconditions.checkNotNull(userExecutor, "userExecutor");
         this.sendViaEventLoop = sendViaEventLoop;
         this.defaultTimeoutMs = defaultTimeoutMs;
     }
@@ -235,11 +235,12 @@ public class GrpcClient {
     private <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             Condition precondition, ReqT request, Executor executor, RetryDecision<ReqT> retry,
             int attempt, boolean afterReauth, boolean backoff, Deadline deadline, long timeoutMs) {
+
         if (precondition != null && !precondition.satisfied()) {
             return failInExecutor(new CancellationException("precondition false"), executor);
         }
         //TODO(maybe) in delay case (attempt > 1), if "session" is inactive,
-        //     skip attempt (and dont increment attempt #)
+        //     skip attempt (and don't increment attempt #)
         final CallOptions baseCallOpts = getCallOptions();
         CallOptions callOpts = deadline != null ? baseCallOpts.withDeadline(deadline) : baseCallOpts;
         if (executor != null) {
@@ -320,10 +321,10 @@ public class GrpcClient {
                         Status.DEADLINE_EXCEEDED.asRuntimeException());
             }
         }
-        final CallOptions callOpts = callOptions;
+        final CallOptions finalCallOpts = callOptions;
         return sendViaEventLoop && !isEventThread.satisfied()
-                ? Futures.submitAsync(() -> fuCall(method, request, callOpts), ses)
-                        : fuCall(method, request, callOpts);
+                ? Futures.submitAsync(() -> fuCall(method, request, finalCallOpts), ses)
+                        : fuCall(method, request, finalCallOpts);
     }
 
     protected <ReqT,R> ListenableFuture<R> fuCall(MethodDescriptor<ReqT,R> method, ReqT request,
@@ -724,6 +725,10 @@ public class GrpcClient {
 
     // ------- utilities
 
+    public final <T> T waitForCall(Function<Executor,Future<T>> asyncCall) {
+        return waitFor(asyncCall, userExecutor);
+    }
+
     public static <T> T waitFor(Future<T> fut) {
         return waitFor(fut, -1L);
     }
@@ -751,25 +756,37 @@ public class GrpcClient {
     }
 
     public static <T> T waitFor(Function<Executor,Future<T>> asyncCall) {
-        ThreadlessExecutor exec = new ThreadlessExecutor();
-        Future<T> fut = asyncCall.apply(exec);
-        while (!fut.isDone()) try {
-            exec.waitAndDrain();
-        } catch (InterruptedException ie) {
-            fut.cancel(true);
-            Thread.currentThread().interrupt();
-            throw Status.CANCELLED.withCause(ie).asRuntimeException();
-        }
+        return waitFor(asyncCall, null);
+    }
+
+    public static <T> T waitFor(Function<Executor,Future<T>> asyncCall,
+            Executor fallbackExecutor) {
+        ThreadlessExecutor exec = new ThreadlessExecutor(fallbackExecutor);
         try {
-            return Uninterruptibles.getUninterruptibly(fut);
-        } catch (CancellationException e) {
-            fut.cancel(true);
-            throw Status.CANCELLED.withCause(e).asRuntimeException();
-        } catch (ExecutionException ee) {
-            throw Status.fromThrowable(ee.getCause()).asRuntimeException();
-        } catch (RuntimeException rte) {
-            fut.cancel(true);
-            throw Status.fromThrowable(rte).asRuntimeException();
+            Future<T> fut = asyncCall.apply(exec);
+            while (!fut.isDone()) try {
+                exec.waitAndDrain();
+            } catch (InterruptedException ie) {
+                if (!fut.isDone()) try {
+                    fut.cancel(true);
+                    exec.waitAndDrain();
+                } catch (InterruptedException ie2) { }
+                Thread.currentThread().interrupt();
+                throw Status.CANCELLED.withCause(ie).asRuntimeException();
+            }
+            try {
+                return Uninterruptibles.getUninterruptibly(fut);
+            } catch (CancellationException e) {
+                throw Status.CANCELLED.withCause(e).asRuntimeException();
+            } catch (ExecutionException ee) {
+                throw Status.fromThrowable(ee.getCause()).asRuntimeException();
+            } catch (RuntimeException rte) {
+                fut.cancel(true);
+                throw Status.fromThrowable(rte).asRuntimeException();
+            }
+        } finally {
+            // This is necessary to ensure the call is closed and doesn't leak resources
+            exec.shutdown();
         }
     }
 
@@ -835,16 +852,21 @@ public class GrpcClient {
     }
 
     /**
-     * Equivalent to the executor used in grpc ClientCalls class for blocking calls
+     * Equivalent to the executor used in grpc ClientCalls class for blocking calls.
      */
     @SuppressWarnings("serial")
     private static final class ThreadlessExecutor extends ConcurrentLinkedQueue<Runnable>
       implements Executor {
         private static final Logger logger = LoggerFactory.getLogger(ThreadlessExecutor.class);
 
+        private static final Thread SHUTDOWN = new Thread(); // sentinel
+
+        private final Executor fallbackExecutor;
         private volatile Thread waiter;
 
-        ThreadlessExecutor() {}
+        ThreadlessExecutor(Executor fallbackExecutor) {
+            this.fallbackExecutor = fallbackExecutor;
+        }
 
         public void waitAndDrain() throws InterruptedException {
             final Thread currentThread = Thread.currentThread();
@@ -862,13 +884,28 @@ public class GrpcClient {
                 }
             }
             do {
-                try {
-                    runnable.run();
-                } catch (Throwable t) {
-                    Throwables.throwIfInstanceOf(t, Error.class);
-                    logger.warn("Runnable threw exception", t);
-                }
+                runQuietly(runnable);
             } while ((runnable = poll()) != null);
+        }
+
+        /**
+         * Called after final call to {@link #waitAndDrain()}, from same thread.
+         */
+        public void shutdown() {
+            waiter = SHUTDOWN;
+            // There should usually be nothing to run here
+            for (Runnable runnable; (runnable = poll()) != null;) {
+                runQuietly(runnable);
+            }
+        }
+
+        private static void runQuietly(Runnable runnable) {
+            try {
+                runnable.run();
+            } catch (Throwable t) {
+                Throwables.throwIfInstanceOf(t, Error.class);
+                logger.warn("Runnable threw exception", t);
+            }
         }
 
         private static void throwIfInterrupted(Thread currentThread) throws InterruptedException {
@@ -876,10 +913,25 @@ public class GrpcClient {
                 throw new InterruptedException();
             }
         }
+
         @Override
         public void execute(Runnable runnable) {
             add(runnable);
-            LockSupport.unpark(waiter); // no-op if null
+            Thread waiter = this.waiter;
+            if (waiter != SHUTDOWN) {
+                LockSupport.unpark(waiter); // no-op if null
+            } else if (remove(runnable)) {
+                // Make sure the runnable gets run one way or another,
+                // to ensure that resources are closed (this is a grpc-java
+                // race condition bug in versions 1.26.0 - 1.30.0).
+                // Note the Runnable will itself always be a SeralizingExecutor,
+                // so there's no need to consider additional synchronization here
+                if (fallbackExecutor != null) {
+                    fallbackExecutor.execute(runnable);
+                } else {
+                    runQuietly(runnable);
+                }
+            }
         }
     }
 }
