@@ -75,7 +75,16 @@ public class GrpcClient {
     private final long defaultTimeoutMs;
  
     public interface AuthProvider {
+        /**
+         * Called from a synchronized context
+         */
         CallCredentials refreshCredentials();
+        default CallCredentials refreshCredentials(Throwable trigger) {
+            return refreshCredentials();
+        }
+        /**
+         * Not called from a synchronized context
+         */
         boolean requiresReauth(Throwable t);
     }
 
@@ -166,7 +175,7 @@ public class GrpcClient {
 
     public void authenticateNow() {
         assert authProvider != NO_AUTH;
-        reauthenticate(getCallOptions());
+        reauthenticate(getCallOptions(), null);
     }
 
     protected CallOptions getCallOptions() {
@@ -201,13 +210,13 @@ public class GrpcClient {
     public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             ReqT request, boolean idempotent) {
         return call(method, null, request, null, retryDecision(idempotent),
-                0, false, null, 0L);
+                0, false, false, null, 0L);
     }
 
     public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             ReqT request, boolean idempotent, long timeoutMillis, Executor executor) {
         return call(method, null, request, executor, retryDecision(idempotent),
-                0, false, null, timeoutMillis);
+                0, false, false, null, timeoutMillis);
     }
 
     //TODO probably move this
@@ -218,14 +227,14 @@ public class GrpcClient {
     public <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method, Condition precondition,
             ReqT request, Executor executor, RetryDecision<ReqT> retry, boolean backoff,
             Deadline deadline, long timeoutMs) {
-        return call(method, precondition, request, executor, retry, 0, backoff, deadline, timeoutMs);
+        return call(method, precondition, request, executor, retry, 0, false, backoff, deadline, timeoutMs);
     }
 
     // deadline is for entire request (including retry pauses),
     // timeout is per-attempt and 0 means not specified
     private <ReqT,R> ListenableFuture<R> call(MethodDescriptor<ReqT,R> method,
             Condition precondition, ReqT request, Executor executor, RetryDecision<ReqT> retry,
-            int attempt, boolean backoff, Deadline deadline, long timeoutMs) {
+            int attempt, boolean afterReauth, boolean backoff, Deadline deadline, long timeoutMs) {
         if (precondition != null && !precondition.satisfied()) {
             return failInExecutor(new CancellationException("precondition false"), executor);
         }
@@ -237,18 +246,29 @@ public class GrpcClient {
             callOpts = callOpts.withExecutor(executor);
         }
         return Futures.catchingAsync(fuCall(method, request, callOpts, timeoutMs), Exception.class, t -> {
-            boolean reauth;
-            // first case: if no retries to do then fail
-            if ((!backoff && attempt > 0) || (deadline != null && deadline.isExpired())
-                    || (!(reauth = reauthIfRequired(t, baseCallOpts))
-                            && !retry.retry(t, request))) {
+            // first cases: determine if we fail immediately
+            if ((!backoff && attempt > 0) || (deadline != null && deadline.isExpired())) {
+                // multiple retries disabled or deadline expired
+                return Futures.immediateFailedFuture(t);
+            }
+            boolean reauth = false;
+            if (authProvider.requiresReauth(t)) {
+                if (afterReauth) {
+                    // if we have an auth failure immediately following a reauth, give up
+                    // (important to avoid infinite loop of auth failures)
+                    return Futures.immediateFailedFuture(t);
+                }
+                reauthenticate(baseCallOpts, t);
+                reauth = true;
+            } else if (!retry.retry(t, request)) {
+                // retry predicate says no (non retryable request and/or error)
                 return Futures.immediateFailedFuture(t);
             }
 
             // second case: immediate retry (first failure or after auth failure + reauth)
             if (reauth || attempt == 0 && immediateRetryLimiter.tryAcquire()) {
                 return call(method, precondition, request, executor, retry,
-                        reauth ? attempt : 1, backoff, deadline, timeoutMs);
+                        reauth ? attempt : 1, reauth, backoff, deadline, timeoutMs);
             }
             int nextAttempt = attempt <= 1 ? 2 : attempt + 1; // skip attempt if we were rate-limited
 
@@ -257,8 +277,8 @@ public class GrpcClient {
             if (deadline != null && deadline.timeRemaining(MILLISECONDS) < delayMs) {
                 return Futures.immediateFailedFuture(t);
             }
-            return Futures.scheduleAsync(() -> call(method, precondition, request, executor,
-                    retry, nextAttempt, backoff, deadline, timeoutMs), delayMs, MILLISECONDS, ses);
+            return Futures.scheduleAsync(() -> call(method, precondition, request, executor, retry,
+                    nextAttempt, false, backoff, deadline, timeoutMs), delayMs, MILLISECONDS, ses);
         }, executor != null ? executor : directExecutor());
     }
 
@@ -313,11 +333,7 @@ public class GrpcClient {
 
     protected boolean retryableStreamError(Throwable error) {
         return (Status.fromThrowable(error).getCode() != Code.INVALID_ARGUMENT
-                && !causedByJavaError(error));
-    }
-
-    protected static boolean causedByJavaError(Throwable t) {
-        return causedBy(t, Error.class);
+                && !causedBy(error, Error.class));
     }
 
     /**
@@ -325,7 +341,7 @@ public class GrpcClient {
      */
     protected boolean reauthIfRequired(Throwable error, CallOptions callOpts) {
         if (authProvider.requiresReauth(error)) {
-            reauthenticate(callOpts);
+            reauthenticate(callOpts, error);
             return true;
         }
         return false;
@@ -336,18 +352,18 @@ public class GrpcClient {
     }
 
     public static Code codeFromThrowable(Throwable t) {
-        Status status = Status.fromThrowable(t);
-        return status != null ? status.getCode() : null;
+        return Status.fromThrowable(t).getCode(); // fromThrowable won't return null
     }
 
 
-    private void reauthenticate(CallOptions failedOpts) {
+    private void reauthenticate(CallOptions failedOpts, Throwable authFailure) {
         // assert name != null && password != null;
         if (getCallOptions() == failedOpts) { // obj identity comparison intentional
             synchronized (this) {
                 CallOptions callOpts = getCallOptions();
                 if (callOpts == failedOpts) {
-                    callOptions = callOpts.withCallCredentials(authProvider.refreshCredentials());
+                    callOptions = callOpts.withCallCredentials(
+                            authProvider.refreshCredentials(authFailure));
                 }
             }
         }
@@ -412,6 +428,8 @@ public class GrpcClient {
         // modified only by response thread
         private boolean finished;
         private Throwable error;
+
+        private boolean lastAuthFailed;
 
         /**
          * 
@@ -605,6 +623,7 @@ public class GrpcClient {
             // called from grpc response thread
             @Override
             public void onNext(RespT value) {
+                lastAuthFailed = false;
                 respStream.onNext(value);
             }
             // called from grpc response thread
@@ -614,9 +633,10 @@ public class GrpcClient {
                 if (finished) {
                     finalError = true;
                 } else {
-                    reauthed = reauthIfRequired(t, sentCallOptions);
+                    reauthed = !lastAuthFailed && reauthIfRequired(t, sentCallOptions);
                     finalError = !reauthed && !retryableStreamError(t);
                 }
+                lastAuthFailed = reauthed;
                 if (!finalError) {
                     int errCount = -1;
                     String msg;
@@ -670,6 +690,7 @@ public class GrpcClient {
             // called from grpc response thread
             @Override
             public void onCompleted() {
+                lastAuthFailed = false;
                 if (!finished) {
                     logger.warn("Unexpected onCompleted received"
                             + " for stream of method " + method.getFullMethodName());

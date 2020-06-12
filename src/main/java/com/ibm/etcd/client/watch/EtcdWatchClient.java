@@ -108,6 +108,8 @@ public final class EtcdWatchClient implements Closeable {
 
         long upToRevision;
         long watchId = -2L; // -2 only pre-creation, >= -1 after
+        boolean lastCreateFailedAuth;
+ 
         boolean userCancelled, finished;
         volatile boolean vUserCancelled;
 
@@ -175,7 +177,8 @@ public final class EtcdWatchClient implements Closeable {
             long newWatchId = wr.getWatchId();
             if (cancelled || newWatchId == -1L) {
                 String reason = wr.getCancelReason();
-                if (reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)) {
+                if (reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)
+                        && !lastCreateFailedAuth) {
                     // If watch creation fails due to an authentication issue (likely
                     // expired), we trigger a reauth+refresh of the stream by sending
                     // an UNAUTHENTICATED error. This watch must first be re-created
@@ -185,6 +188,7 @@ public final class EtcdWatchClient implements Closeable {
                         if (notClosed) {
                             StreamObserver<WatchRequest> reqStream = getRequestStream();
                             if (reqStream != null) {
+                                lastCreateFailedAuth = true;
                                 reqStream.onError(Code.UNAUTHENTICATED
                                     .toStatus().withDescription(reason).asException());
                             }
@@ -193,25 +197,26 @@ public final class EtcdWatchClient implements Closeable {
                 } else {
                     processCancelledResponse(wr);
                 }
-            } else {
-                boolean first = this.watchId < 0, veryFirst = this.watchId == -2;
-                this.watchId = newWatchId;
-                if (activeWatchers.putIfAbsent(newWatchId, this) == null) {
-                    if (userCancelled) {
-                        sendCancel(watchId);
-                    } else {
-                        if (veryFirst) {
-                            watcherExecutor.execute(() -> completeCreateFuture(true, null));
-                        }
-                        if (!first || wr.getEventsCount() > 0) {
-                            processWatchEvents(wr);
-                        }
-                        return true;
-                    }
+                return false;
+            }
+            lastCreateFailedAuth = false;
+            boolean first = this.watchId < 0, veryFirst = this.watchId == -2;
+            this.watchId = newWatchId;
+            if (activeWatchers.putIfAbsent(newWatchId, this) == null) {
+                if (userCancelled) {
+                    sendCancel(watchId);
                 } else {
-                    logger.error("State error: watchId conflict: " + watchId);
-                    //TODO cancel existing watch here?
+                    if (veryFirst) {
+                        watcherExecutor.execute(() -> completeCreateFuture(true, null));
+                    }
+                    if (!first || wr.getEventsCount() > 0) {
+                        processWatchEvents(wr);
+                    }
+                    return true;
                 }
+            } else {
+                logger.error("State error: watchId conflict: " + watchId);
+                //TODO cancel existing watch here?
             }
             return false;
         }
@@ -462,8 +467,8 @@ public final class EtcdWatchClient implements Closeable {
                 if (wrec.watchId >= 0) {
                     wrec.watchId = -1L;
                 }
-                boolean cancelled = wrec.userCancelled || closed || newRequestStream == null;
-                if (!cancelled) {
+                boolean cancelled = wrec.userCancelled || closed;
+                if (!cancelled && newRequestStream != null) {
                     WatchRequest createReq = wrec.newCreateWatchRequest();
                     synchronized (EtcdWatchClient.this) {
                         if (closed) {
@@ -475,8 +480,11 @@ public final class EtcdWatchClient implements Closeable {
                         }
                     }
                 }
-                if (cancelled) {
-                    wrec.vUserCancelled = wrec.userCancelled = true;
+                // Re-check since cancelled could have been set to true within above block
+                if (cancelled || newRequestStream == null) {
+                    if (cancelled) {
+                        wrec.vUserCancelled = wrec.userCancelled = true;
+                    }
                     wrec.finished = true;
                     // err is null here in normal cancellation case
                     wrec.publishCompletionEvent(err);
