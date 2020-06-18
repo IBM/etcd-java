@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -42,6 +43,7 @@ import javax.net.ssl.TrustManagerFactory;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteSource;
 import com.google.common.util.concurrent.ForwardingExecutorService;
 import com.google.common.util.concurrent.Futures;
@@ -289,8 +291,12 @@ public class EtcdClient implements KvStoreClient {
                 return EtcdClient.reauthRequired(t);
             }
             @Override
+            public CallCredentials refreshCredentials(Throwable trigger) {
+                return EtcdClient.this.refreshCredentials(trigger);
+            }
+            @Override
             public CallCredentials refreshCredentials() {
-                return EtcdClient.this.refreshCredentials();
+                return refreshCredentials(null);
             }
         };
 
@@ -385,21 +391,68 @@ public class EtcdClient implements KvStoreClient {
 
     // ------ authentication logic
 
+    private static final Set<Code> OTHER_AUTH_FAILURE_CODES = ImmutableSet.of(
+            Code.INVALID_ARGUMENT, Code.FAILED_PRECONDITION, Code.PERMISSION_DENIED, Code.UNKNOWN);
+
+    // Various different errors can imply a re-auth is required (sometimes non-obvious),
+    // so we cover most related messages to be safe. This should not cause problems since
+    // re-authentication attempts are rate-limited to once every 15 seconds.
+    //
+    // See https://godoc.org/github.com/coreos/etcd/auth#pkg-variables
+    // and https://godoc.org/github.com/coreos/etcd/etcdserver/api/v3rpc/rpctypes#pkg-variables
+    private static final String[] AUTH_FAILURE_MESSAGES = {
+            // These will be prefixed with "etcdserver: "
+            "root user does not exist",
+            "root user does not have root role",
+            "user name already exists",
+            "user name is empty",
+            "user name not found",
+            "role name already exists",
+            "role name not found",
+            "role name is empty",
+            "authentication failed, invalid user ID or password",
+            "permission denied",
+            "role is not granted to the user",
+            "permission is not granted to the role",
+            "authentication is not enabled",
+            "invalid auth token",
+            "invalid auth management"
+    };
+
+    private Status lastAuthFailStatus;
+    private long lastAuthFailTime;
+
     protected static boolean reauthRequired(Throwable error) {
-        Code statusCode = GrpcClient.codeFromThrowable(error);
-        return statusCode == Code.UNAUTHENTICATED ||
-                (statusCode == Code.INVALID_ARGUMENT
-                && contains(error.getMessage(), "user name is empty") ||
-                (statusCode == Code.CANCELLED
-                && reauthRequired(error.getCause())));
+        Status status = Status.fromThrowable(error);
+        Code code = status.getCode();
+        return code == Code.UNAUTHENTICATED
+                || (OTHER_AUTH_FAILURE_CODES.contains(code) &&
+                        (startsWith(status.getDescription(), "auth: ")
+                                || endsWith(status.getDescription(), AUTH_FAILURE_MESSAGES)))
+                || (code == Code.CANCELLED && reauthRequired(error.getCause()));
     }
 
-    private CallCredentials refreshCredentials() {
+    // This is only called in a synchronized context
+    private CallCredentials refreshCredentials(Throwable trigger) {
+        long lastAuthFailure = System.currentTimeMillis() - lastAuthFailTime;
+        if (lastAuthFailure < 15_000L) {
+            // Rate-limit how often re-auth attempts are made,
+            // return last auth failure in the meantime
+            return new CallCredentials() {
+                @Override
+                public void applyRequestMetadata(RequestInfo requestInfo,
+                        Executor appExecutor, MetadataApplier applier) {
+                    applier.fail(lastAuthFailStatus);
+                }
+                //@Override
+                public void thisUsesUnstableApi() {}
+            };
+        }
         return new CallCredentials() {
-            private Metadata tokenHeader; //TODO volatile TBD
-            private final long authTime = System.currentTimeMillis();
+            private volatile Metadata tokenHeader; //TODO volatile TBD
             private final ListenableFuture<Metadata> futureTokenHeader =
                     Futures.transform(authenticate(), ar -> tokenHeader = tokenHeader(ar), directExecutor());
+
             @Override
             public void applyRequestMetadata(RequestInfo requestInfo,
                     Executor appExecutor, MetadataApplier applier) {
@@ -411,11 +464,14 @@ public class EtcdClient implements KvStoreClient {
                         applier.apply(futureTokenHeader.get());
                     } catch (ExecutionException | InterruptedException ee) { // (IE won't be thrown)
                         Status failStatus = Status.fromThrowable(ee.getCause());
-                        Code code = failStatus != null ? failStatus.getCode() : null;
-                        if (code != Code.INVALID_ARGUMENT
-                                && (System.currentTimeMillis() - authTime) > 15_000L) {
-                            // this will force another auth attempt
-                            failStatus = Status.UNAUTHENTICATED.withDescription("re-attempt re-auth");
+                        lastAuthFailStatus = failStatus;
+                        lastAuthFailTime = System.currentTimeMillis();
+                        if (trigger != null) {
+                            if (failStatus.getCause() != null) {
+                                failStatus.getCause().addSuppressed(trigger);
+                            } else {
+                                failStatus = failStatus.withCause(trigger);
+                            }
                         }
                         applier.fail(failStatus);
                     }
@@ -439,16 +495,15 @@ public class EtcdClient implements KvStoreClient {
         CallOptions callOpts = CallOptions.DEFAULT;
         return Futures.catchingAsync(
                 grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
-                Exception.class, ex -> !retryAuthRequest(ex)
+                    Exception.class, ex -> !retryAuthRequest(ex)
                         ? Futures.immediateFailedFuture(ex)
                         : grpc.fuCall(METHOD_AUTHENTICATE, request, callOpts, 0L),
                 directExecutor());
     }
 
     protected static boolean retryAuthRequest(Throwable error) {
-        Status status = Status.fromThrowable(error);
-        Code statusCode = status != null ? status.getCode() : null;
-        return statusCode == Code.UNAVAILABLE && GrpcClient.isConnectException(error);
+        return GrpcClient.codeFromThrowable(error) == Code.UNAVAILABLE
+                && GrpcClient.isConnectException(error);
     }
 
     // ------ individual client getters
@@ -516,6 +571,19 @@ public class EtcdClient implements KvStoreClient {
 
     protected static boolean contains(String str, String subStr) {
         return str != null && str.contains(subStr);
+    }
+
+    protected static boolean startsWith(String str, String prefix) {
+        return str != null && str.startsWith(prefix);
+    }
+
+    protected static boolean endsWith(String str, String... suffixes) {
+        if (str != null) {
+            for (String suffix : suffixes) {
+                if (str.endsWith(suffix)) return true;
+            }
+        }
+        return false;
     }
 
     protected static final class EtcdEventThread extends FastThreadLocalThread {
