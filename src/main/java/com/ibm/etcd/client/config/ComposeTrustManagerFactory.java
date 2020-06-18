@@ -37,10 +37,9 @@ import io.netty.handler.ssl.util.SimpleTrustManagerFactory;
 import io.netty.util.internal.EmptyArrays;
 
 /**
- * Custom trust manager to use with multi-endpoint IBM Compose etcd deployments.
- * Works around grpc-java TLS issues.
- * 
+ * @deprecated This is no longer required and shouldn't be used
  */
+@Deprecated
 public class ComposeTrustManagerFactory extends SimpleTrustManagerFactory {
 
     private static final Logger logger = LoggerFactory.getLogger(ComposeTrustManagerFactory.class);

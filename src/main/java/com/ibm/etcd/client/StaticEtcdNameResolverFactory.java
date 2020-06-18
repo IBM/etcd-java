@@ -15,13 +15,15 @@
  */
 package com.ibm.etcd.client;
 
+import static io.grpc.EquivalentAddressGroup.ATTR_AUTHORITY_OVERRIDE;
+import static java.util.stream.Collectors.toList;
+
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import io.grpc.Attributes;
@@ -51,14 +53,32 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
         public SubResolver(URI uri, NameResolver.Helper helper) {
             this.resolver = DNS_PROVIDER.newNameResolver(uri, helper);
         }
+
+        void updateEagList(List<EquivalentAddressGroup> servers, boolean ownAuthority) {
+            if (ownAuthority) {
+                // Use this endpoint address' authority for its subchannel
+                String authority = resolver.getServiceAuthority();
+                eagList = servers.stream().map(eag -> new EquivalentAddressGroup(
+                        eag.getAddresses(), eag.getAttributes().toBuilder()
+                            .set(ATTR_AUTHORITY_OVERRIDE, authority).build())).collect(toList());
+            } else {
+                eagList = servers;
+            }
+        }
     }
 
     private final URI[] uris;
+    private final String overrideAuthority;
 
     public StaticEtcdNameResolverFactory(List<String> endpoints) {
+        this(endpoints, null);
+    }
+
+    public StaticEtcdNameResolverFactory(List<String> endpoints, String overrideAuthority) {
         if (endpoints == null || endpoints.isEmpty()) {
             throw new IllegalArgumentException("endpoints");
         }
+        this.overrideAuthority = overrideAuthority;
         int count = endpoints.size();
         uris = new URI[count];
         for (int i = 0; i < count; i++) {
@@ -95,9 +115,11 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
                     @Override
                     public void onAddresses(List<EquivalentAddressGroup> servers, Attributes attributes) {
                         synchronized (resolvers) {
-                            sr.eagList = servers;
+                            // Update this subresolver's servers
+                            sr.updateEagList(servers, overrideAuthority == null);
+                            // Advertise the complete list of EAGs
                             List<EquivalentAddressGroup> newList = Stream.of(resolvers)
-                                    .flatMap(r -> r.eagList.stream()).collect(Collectors.toList());
+                                    .flatMap(r -> r.eagList.stream()).collect(toList());
                             currentCount = newList.size();
                             listener.onAddresses(newList, Attributes.EMPTY);
                         }
@@ -122,7 +144,7 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
             }
             @Override
             public String getServiceAuthority() {
-                return ETCD;
+                return overrideAuthority != null ? overrideAuthority : ETCD;
             }
             @Override
             public void shutdown() {
