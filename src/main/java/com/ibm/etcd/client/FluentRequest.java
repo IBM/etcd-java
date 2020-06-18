@@ -100,7 +100,7 @@ public interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,Resp
         }
         @Override
         public final RespT sync() {
-            return GrpcClient.waitFor(this::async);
+            return client.waitForCall(this::async);
         }
     }
 }

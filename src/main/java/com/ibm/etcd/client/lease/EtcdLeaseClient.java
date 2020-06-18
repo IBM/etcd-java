@@ -528,14 +528,15 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         // *not* called from event loop
         void reconnected() {
             eventLoop.execute(() -> {
-                if (state == CLOSED) {
+                LeaseState stateNow = state; 
+                if (stateNow == CLOSED) {
                     return;
                 }
                 connected = true;
                 if (createFuture != null) {
                     return;
                 }
-                if (leaseId == 0L || state == PENDING || state == EXPIRED) {
+                if (leaseId == 0L || stateNow == PENDING || stateNow == EXPIRED) {
                     create();
                 } else {
                     sendKeepAliveIfNeeded();
