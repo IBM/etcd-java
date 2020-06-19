@@ -234,6 +234,10 @@ public class EtcdClient implements KvStoreClient {
             return this;
         }
 
+        /**
+         * Override the authority used for TLS hostname verification. Applies
+         * to all endpoints and does not otherwise affect DNS name resolution.
+         */
         public Builder overrideAuthority(String authority) {
             this.overrideAuthority = authority;
             return this;
