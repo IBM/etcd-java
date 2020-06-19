@@ -21,6 +21,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
@@ -120,8 +121,12 @@ public class EtcdClient implements KvStoreClient {
     private volatile PersistentLease sessionLease; // lazy-instantiated
 
     public static class Builder {
-        private final NettyChannelBuilder chanBuilder;
+        private final List<String> endpoints;
+        private boolean plainText;
+        private int maxInboundMessageSize;
         private SslContextBuilder sslContextBuilder;
+        private SslContext sslContext;
+        private String overrideAuthority;
         private ByteString name, password;
         private long defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
         private boolean preemptAuth;
@@ -130,8 +135,9 @@ public class EtcdClient implements KvStoreClient {
         private boolean sendViaEventLoop = true; // default true
         private int sessTimeoutSecs = DEFAULT_SESSION_TIMEOUT_SECS;
 
-        Builder(NettyChannelBuilder chanBuilder) {
-            this.chanBuilder = chanBuilder;
+        Builder(List<String> endpoints) {
+            this.endpoints = Preconditions.checkNotNull(endpoints);
+            Preconditions.checkArgument(!endpoints.isEmpty(), "empty endpoints");
         }
 
         /**
@@ -224,7 +230,16 @@ public class EtcdClient implements KvStoreClient {
          * Disable TLS - to connect to insecure servers in development contexts
          */
         public Builder withPlainText() {
-            chanBuilder.usePlaintext();
+            plainText = true;
+            return this;
+        }
+
+        /**
+         * Override the authority used for TLS hostname verification. Applies
+         * to all endpoints and does not otherwise affect DNS name resolution.
+         */
+        public Builder overrideAuthority(String authority) {
+            this.overrideAuthority = authority;
             return this;
         }
 
@@ -237,7 +252,7 @@ public class EtcdClient implements KvStoreClient {
          */
         public Builder withCaCert(ByteSource certSource) throws IOException, SSLException {
             try (InputStream cert = certSource.openStream()) {
-                chanBuilder.sslContext(sslBuilder().trustManager(cert).build());
+                sslContext = sslBuilder().trustManager(cert).build();
             }
             return this;
         }
@@ -250,7 +265,7 @@ public class EtcdClient implements KvStoreClient {
          * @throws SSLException
          */
         public Builder withTrustManager(TrustManagerFactory tmf) throws SSLException {
-            chanBuilder.sslContext(sslBuilder().trustManager(tmf).build());
+            sslContext = sslBuilder().trustManager(tmf).build();
             return this;
         }
 
@@ -265,7 +280,7 @@ public class EtcdClient implements KvStoreClient {
         public Builder withTlsConfig(Consumer<SslContextBuilder> contextBuilder) throws SSLException {
             SslContextBuilder sslBuilder = sslBuilder();
             contextBuilder.accept(sslBuilder);
-            chanBuilder.sslContext(sslBuilder.build());
+            sslContext = sslBuilder.build();
             return this;
         }
 
@@ -287,7 +302,7 @@ public class EtcdClient implements KvStoreClient {
          * @param sizeInBytes
          */
         public Builder withMaxInboundMessageSize(int sizeInBytes) {
-            chanBuilder.maxInboundMessageSize(sizeInBytes);
+            this.maxInboundMessageSize = sizeInBytes; 
             return this;
         }
 
@@ -295,7 +310,28 @@ public class EtcdClient implements KvStoreClient {
          * @return the built {@link EtcdClient} instance
          */
         public EtcdClient build() {
-            return new EtcdClient(chanBuilder, defaultTimeoutMs, name, password,
+            NettyChannelBuilder ncb;
+            if (endpoints.size() == 1) {
+                ncb = NettyChannelBuilder.forTarget(endpoints.get(0));
+                if (overrideAuthority != null) {
+                    ncb.overrideAuthority(overrideAuthority);
+                }
+            } else {
+                ncb = NettyChannelBuilder
+                        .forTarget(StaticEtcdNameResolverFactory.ETCD)
+                        .nameResolverFactory(new StaticEtcdNameResolverFactory(
+                                endpoints, overrideAuthority));
+            }
+            if (plainText) {
+                ncb.usePlaintext();
+            }
+            if (sslContext != null) {
+                ncb.sslContext(sslContext);
+            }
+            if (maxInboundMessageSize != 0) {
+                ncb.maxInboundMessageSize(maxInboundMessageSize);
+            }
+            return new EtcdClient(ncb, defaultTimeoutMs, name, password,
                     preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
         }
     }
@@ -312,7 +348,7 @@ public class EtcdClient implements KvStoreClient {
      */
     public static Builder forEndpoint(String host, int port) {
         String target = GrpcUtil.authorityFromHostAndPort(host, port);
-        return new Builder(NettyChannelBuilder.forTarget(target));
+        return new Builder(Collections.singletonList(target));
     }
 
     /**
@@ -321,10 +357,7 @@ public class EtcdClient implements KvStoreClient {
      * @return
      */
     public static Builder forEndpoints(List<String> endpoints) {
-        NettyChannelBuilder ncb = NettyChannelBuilder
-                .forTarget(StaticEtcdNameResolverFactory.ETCD)
-                .nameResolverFactory(new StaticEtcdNameResolverFactory(endpoints));
-        return new Builder(ncb);
+        return new Builder(endpoints);
     }
 
     /**

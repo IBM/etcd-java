@@ -69,8 +69,10 @@ public class EtcdClusterConfig {
     TlsMode tlsMode;
     ByteString user, password;
     ByteString rootPrefix; // a.k.a namespace
+    @Deprecated
     String composeDeployment;
     ByteSource certificate;
+    String overrideAuthority;
 
     protected EtcdClusterConfig() {}
 
@@ -91,6 +93,9 @@ public class EtcdClusterConfig {
         EtcdClient.Builder builder = EtcdClient.forEndpoints(endpointList)
                 .withCredentials(user, password).withImmediateAuth()
                 .withMaxInboundMessageSize(maxMessageSize);
+        if (overrideAuthority != null) {
+            builder.overrideAuthority(overrideAuthority);
+        }
         TlsMode ssl = tlsMode;
         if (ssl == TlsMode.AUTO || ssl == null) {
             String ep = endpointList.get(0);
@@ -147,6 +152,7 @@ public class EtcdClusterConfig {
             }
             config.certificate = Files.asByteSource(certFile);
         }
+        config.overrideAuthority = props.getProperty("override_authority");
         return config;
     }
 
@@ -184,6 +190,7 @@ public class EtcdClusterConfig {
                 config.certificate = ByteSource.wrap(jsonConfig.certificate.getBytes(UTF_8));
             }
         }
+        config.overrideAuthority = jsonConfig.overrideAuthority;
         return config;
     }
 
@@ -286,11 +293,14 @@ public class EtcdClusterConfig {
         String password;
         @SerializedName("root_prefix") // a.k.a namespace
         String rootPrefix;
+        @Deprecated
         @SerializedName("compose_deployment")
         String composeDeployment;
         @SerializedName("certificate")
         String certificate;
         @SerializedName("certificate_file")
         String certificateFile;
+        @SerializedName("override_authority")
+        String overrideAuthority;
     }
 }
