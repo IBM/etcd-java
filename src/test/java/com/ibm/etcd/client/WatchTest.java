@@ -163,7 +163,8 @@ public class WatchTest {
             proxy.start();
 
             // watch should be unaffected - next event seen should be the missed one
-            wu = (WatchUpdate)watchEvents.poll(5000L, TimeUnit.MILLISECONDS);
+            wu = (WatchUpdate) watchEvents.poll(6000L, TimeUnit.MILLISECONDS);
+            assertNotNull("Expected watch event not received after server reconnection", wu);
             assertEquals(bs("/watchtest/e"), wu.getEvents().get(0).getKv().getKey());
 
             watch.close();
