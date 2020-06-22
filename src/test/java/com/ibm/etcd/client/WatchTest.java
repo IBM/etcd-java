@@ -15,7 +15,7 @@
  */
 package com.ibm.etcd.client;
 
-import static com.ibm.etcd.client.KvTest.bs;
+import static com.ibm.etcd.client.KeyUtils.bs;
 import static com.ibm.etcd.client.KvTest.t;
 import static org.junit.Assert.*;
 
