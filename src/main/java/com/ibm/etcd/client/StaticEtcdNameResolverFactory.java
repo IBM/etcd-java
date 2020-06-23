@@ -22,8 +22,6 @@ import java.net.URI;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import io.grpc.Attributes;
@@ -42,16 +40,12 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
 
     protected static final NameResolver.Factory DNS_PROVIDER = new DnsNameResolverProvider();
 
-    // (not intended to be strict hostname validation here)
-    protected static final Pattern ADDR_PATT =
-            Pattern.compile("(?:https?://)?([a-zA-Z0-9\\-.]+)(?::(\\d+))?");
-
     static class SubResolver {
         final NameResolver resolver;
         List<EquivalentAddressGroup> eagList = Collections.emptyList();
 
-        public SubResolver(URI uri, NameResolver.Helper helper) {
-            this.resolver = DNS_PROVIDER.newNameResolver(uri, helper);
+        public SubResolver(URI uri, NameResolver.Args args) {
+            this.resolver = DNS_PROVIDER.newNameResolver(uri, args);
         }
 
         void updateEagList(List<EquivalentAddressGroup> servers, boolean ownAuthority) {
@@ -79,34 +73,23 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
             throw new IllegalArgumentException("endpoints");
         }
         this.overrideAuthority = overrideAuthority;
-        int count = endpoints.size();
-        uris = new URI[count];
-        for (int i = 0; i < count; i++) {
-            String endpoint = endpoints.get(i).trim();
-            Matcher m = ADDR_PATT.matcher(endpoint);
-            if (!m.matches()) {
-                throw new IllegalArgumentException("invalid endpoint: " + endpoint);
-            }
-            String portStr = m.group(2);
-            if (portStr == null) {
-                portStr = String.valueOf(EtcdClient.DEFAULT_PORT);
-            }
-            uris[i] = URI.create("dns:///" + m.group(1) + ":" + portStr);
-        }
-        if (count > 1) {
+        uris = endpoints.stream()
+                .map(ep -> URI.create(EtcdClient.endpointToUriString(ep)))
+                .toArray(URI[]::new);
+        if (uris.length > 1) {
             Collections.shuffle(Arrays.asList(uris));
         }
     }
 
     @Override
-    public NameResolver newNameResolver(URI targetUri, NameResolver.Helper helper) {
+    public NameResolver newNameResolver(URI targetUri, NameResolver.Args args) {
         if (!ETCD.equals(targetUri.getScheme())) {
             return null;
         }
         if (uris.length == 1) {
-            return new SubResolver(uris[0], helper).resolver;
+            return new SubResolver(uris[0], args).resolver;
         }
-        SubResolver[] resolvers = createSubResolvers(helper);
+        SubResolver[] resolvers = createSubResolvers(args);
         return new NameResolver() {
             int currentCount = 0;
             @Override
@@ -157,11 +140,11 @@ class StaticEtcdNameResolverFactory extends NameResolver.Factory {
         };
     }
 
-    private SubResolver[] createSubResolvers(NameResolver.Helper helper) {
+    private SubResolver[] createSubResolvers(NameResolver.Args args) {
         int count = uris.length;
         SubResolver[] resolvers = new SubResolver[count];
         for (int i = 0; i < count; i++) {
-            resolvers[i] = new SubResolver(uris[i], helper);
+            resolvers[i] = new SubResolver(uris[i], args);
         }
         return resolvers;
     }

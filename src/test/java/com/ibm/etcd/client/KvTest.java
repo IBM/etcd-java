@@ -15,6 +15,7 @@
  */
 package com.ibm.etcd.client;
 
+import static com.ibm.etcd.client.KeyUtils.bs;
 import static org.junit.Assert.*;
 
 import java.util.UUID;
@@ -27,8 +28,6 @@ import org.junit.Test;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
-import com.ibm.etcd.client.EtcdClient;
-import com.ibm.etcd.client.KvStoreClient;
 import com.ibm.etcd.client.kv.KvClient;
 
 import io.grpc.Deadline;
@@ -186,10 +185,6 @@ public class KvTest {
                 client.getKvClient().delete(bs("deadlock-test/")).asPrefix().sync();
             }
         }
-    }
-
-    public static ByteString bs(String str) {
-        return ByteString.copyFromUtf8(str);
     }
 
     static String t(long start) {

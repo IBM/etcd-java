@@ -37,6 +37,8 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManagerFactory;
@@ -104,6 +106,10 @@ public class EtcdClient implements KvStoreClient {
 
     public static final long DEFAULT_TIMEOUT_MS = 10_000L; // 10sec default
     public static final int DEFAULT_SESSION_TIMEOUT_SECS = 20; // 20sec default
+
+    // (not intended to be strict hostname validation here)
+    protected static final Pattern ADDR_PATT =
+            Pattern.compile("(?:https?://|dns:///)?([a-zA-Z0-9\\-.]+)(?::(\\d+))?");
 
     private final int sessionTimeoutSecs;
 
@@ -302,7 +308,7 @@ public class EtcdClient implements KvStoreClient {
          * @param sizeInBytes
          */
         public Builder withMaxInboundMessageSize(int sizeInBytes) {
-            this.maxInboundMessageSize = sizeInBytes; 
+            this.maxInboundMessageSize = sizeInBytes;
             return this;
         }
 
@@ -312,7 +318,7 @@ public class EtcdClient implements KvStoreClient {
         public EtcdClient build() {
             NettyChannelBuilder ncb;
             if (endpoints.size() == 1) {
-                ncb = NettyChannelBuilder.forTarget(endpoints.get(0));
+                ncb = NettyChannelBuilder.forTarget(endpointToUriString(endpoints.get(0)));
                 if (overrideAuthority != null) {
                     ncb.overrideAuthority(overrideAuthority);
                 }
@@ -334,6 +340,19 @@ public class EtcdClient implements KvStoreClient {
             return new EtcdClient(ncb, defaultTimeoutMs, name, password,
                     preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
         }
+    }
+
+    static String endpointToUriString(String endpoint) {
+        Preconditions.checkNotNull(endpoint, "null endpoint");
+        Matcher m = ADDR_PATT.matcher(endpoint.trim());
+        if (!m.matches()) {
+            throw new IllegalArgumentException("invalid endpoint: " + endpoint);
+        }
+        String portStr = m.group(2);
+        if (portStr == null) {
+            portStr = String.valueOf(DEFAULT_PORT);
+        }
+        return "dns:///" + m.group(1) + ":" + portStr;
     }
 
     private static int defaultThreadCount() {

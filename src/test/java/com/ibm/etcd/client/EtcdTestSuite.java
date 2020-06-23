@@ -35,7 +35,7 @@ import com.ibm.etcd.client.utils.PersistentLeaseKeyTest;
 import com.ibm.etcd.client.utils.RangeCacheTest;
 
 @RunWith(Suite.class)
-@SuiteClasses({KvTest.class, WatchTest.class, LeaseTest.class,
+@SuiteClasses({ClientBuilderTest.class, KvTest.class, WatchTest.class, LeaseTest.class,
     LockTest.class, PersistentLeaseKeyTest.class, RangeCacheTest.class})
 public class EtcdTestSuite {
 

@@ -20,7 +20,7 @@ import static org.junit.Assert.*;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static com.ibm.etcd.client.KvTest.bs;
+import static com.ibm.etcd.client.KeyUtils.bs;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import org.junit.AfterClass;

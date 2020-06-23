@@ -18,7 +18,7 @@ package com.ibm.etcd.client.utils;
 import static com.ibm.etcd.client.KeyUtils.fromHexString;
 import static com.ibm.etcd.client.KeyUtils.plusOne;
 import static com.ibm.etcd.client.KeyUtils.toHexString;
-import static com.ibm.etcd.client.KvTest.bs;
+import static com.ibm.etcd.client.KeyUtils.bs;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
