@@ -25,13 +25,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.NavigableSet;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -115,11 +113,11 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     @GuardedBy("this")
     private ListenableFuture<Boolean> startFuture;
 
-    private final ConcurrentMap<ByteString,KeyValue> entries;
+    private final ConcurrentMap<ByteString, KeyValue> entries;
 
     // deletion queue is used to avoid race condition where a PUT is seen
-    // after a delete that it precedes
-    private final NavigableSet<KeyValue> deletionQueue;
+    // after a delete that it precedes (values ignored)
+    private final NavigableMap<KeyValue, Object> deletionQueue;
 
     // Modified only from listenerExecutor context
     private final AtomicLong seenUpToRev = new AtomicLong(0L);
@@ -140,7 +138,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         this.kvClient = client.getKvClient();
         this.entries = !sorted ? new ConcurrentHashMap<>(32,.75f,4)
                 : new ConcurrentSkipListMap<>(KeyUtils::compareByteStrings);
-        this.deletionQueue = new ConcurrentSkipListSet<>((kv1, kv2) -> {
+        this.deletionQueue = new ConcurrentSkipListMap<>((kv1, kv2) -> {
             int diff = Long.compare(kv1.getModRevision(), kv2.getModRevision());
             return diff != 0 ? diff : KeyUtils.compareByteStrings(kv1.getKey(), kv2.getKey());
         });
@@ -386,7 +384,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         if (deletionQueue.isEmpty()) {
             return;
         }
-        for (Iterator<KeyValue> it = deletionQueue.iterator(); it.hasNext();) {
+        for (Iterator<KeyValue> it = deletionQueue.keySet().iterator(); it.hasNext();) {
             KeyValue kv = it.next();
             if (kv.getModRevision() > upToRev) {
                 return;
@@ -516,7 +514,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     deletionQueue.remove(existKv);
                 }
                 if (isDeleted) {
-                    deletionQueue.add(keyValue);
+                    deletionQueue.put(keyValue, Boolean.TRUE);
                     if (!deletionReplaced) { // previous value
                         notifyListeners(EventType.DELETED, existKv, watchThread);
                     }
@@ -534,7 +532,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             if ((existKv = entries.putIfAbsent(key, keyValue)) == null) {
                 // update succeeded
                 if (isDeleted) {
-                    deletionQueue.add(keyValue);
+                    deletionQueue.put(keyValue, Boolean.TRUE);
                     return null;
                 }
                 break; // added
@@ -599,14 +597,16 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             // We need to exclude deletion records but can't just subtract
             // deletionQueue.size() since it can contain "stale" records
             // which persist until the next watch update flushes them
-            KeyValue deletion = deletionQueue.pollFirst();
-            while (deletion != null) {
-                if (entries.get(deletion.getKey()) != deletion) {
-                    deletionQueue.remove(deletion);
-                } else if (--total == 0) {
-                    return 0;
+            Map.Entry<KeyValue, Object> first = deletionQueue.firstEntry();
+            if (first != null) {
+                for (KeyValue deletion = first.getKey(); deletion != null;
+                        deletion = deletionQueue.higherKey(deletion)) {
+                    if (entries.get(deletion.getKey()) != deletion) {
+                        deletionQueue.remove(deletion);
+                    } else if (--total == 0) {
+                        return 0;
+                    }
                 }
-                deletion = deletionQueue.higher(deletion);
             }
         }
         return total;
