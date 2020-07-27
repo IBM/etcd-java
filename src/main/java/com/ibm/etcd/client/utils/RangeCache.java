@@ -25,11 +25,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -116,33 +118,49 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     private final ConcurrentMap<ByteString, KeyValue> entries;
 
     // deletion queue is used to avoid race condition where a PUT is seen
-    // after a delete that it precedes (values ignored)
-    private final NavigableMap<KeyValue, Object> deletionQueue;
+    // after a delete that it precedes
+    private final NavigableSet<KeyValue> deletionQueue;
 
     // Modified only from listenerExecutor context
     private final AtomicLong seenUpToRev = new AtomicLong(0L);
 
     public RangeCache(EtcdClient client, ByteString prefix) {
-        this(client, prefix, false);
+        this(client, prefix, false, null);
+    }
+
+    public RangeCache(EtcdClient client, ByteString prefix, Executor listenerExecutor) {
+        this(client, prefix, false, listenerExecutor);
     }
 
     public RangeCache(EtcdClient client, ByteString prefix, boolean sorted) {
+        this(client, prefix, sorted, null);
+    }
+
+    public RangeCache(EtcdClient client, ByteString prefix, boolean sorted,
+            Executor listenerExecutor) {
         // per etcd API spec: end == start+1 => prefix
         this(client, prefix, KeyUtils.plusOne(prefix), sorted);
     }
 
     public RangeCache(EtcdClient client, ByteString fromKey, ByteString toKey, boolean sorted) {
+        this(client, fromKey, toKey, sorted, null);
+    }
+
+    public RangeCache(EtcdClient client, ByteString fromKey, ByteString toKey,
+            boolean sorted, Executor listenerExecutor) {
         this.fromKey = fromKey;
         this.toKey = toKey;
         this.client = client;
         this.kvClient = client.getKvClient();
         this.entries = !sorted ? new ConcurrentHashMap<>(32,.75f,4)
                 : new ConcurrentSkipListMap<>(KeyUtils::compareByteStrings);
-        this.deletionQueue = new ConcurrentSkipListMap<>((kv1, kv2) -> {
+        this.deletionQueue = new ConcurrentSkipListSet<>((kv1, kv2) -> {
             int diff = Long.compare(kv1.getModRevision(), kv2.getModRevision());
             return diff != 0 ? diff : KeyUtils.compareByteStrings(kv1.getKey(), kv2.getKey());
         });
-        this.listenerExecutor = GrpcClient.serialized(client.getExecutor());
+        // This does not wrap if listenerExecutor is already a SerializedExecutor
+        this.listenerExecutor = GrpcClient.serialized(listenerExecutor != null
+                ? listenerExecutor : client.getExecutor());
     }
 
     /**
@@ -384,7 +402,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         if (deletionQueue.isEmpty()) {
             return;
         }
-        for (Iterator<KeyValue> it = deletionQueue.keySet().iterator(); it.hasNext();) {
+        for (Iterator<KeyValue> it = deletionQueue.iterator(); it.hasNext();) {
             KeyValue kv = it.next();
             if (kv.getModRevision() > upToRev) {
                 return;
@@ -514,7 +532,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     deletionQueue.remove(existKv);
                 }
                 if (isDeleted) {
-                    deletionQueue.put(keyValue, Boolean.TRUE);
+                    deletionQueue.add(keyValue);
                     if (!deletionReplaced) { // previous value
                         notifyListeners(EventType.DELETED, existKv, watchThread);
                     }
@@ -532,7 +550,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             if ((existKv = entries.putIfAbsent(key, keyValue)) == null) {
                 // update succeeded
                 if (isDeleted) {
-                    deletionQueue.put(keyValue, Boolean.TRUE);
+                    deletionQueue.add(keyValue);
                     return null;
                 }
                 break; // added
@@ -593,19 +611,16 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
     public int size() {
         int total = entries.size();
-        if (total > 0) {
+        if (total > 0 && !deletionQueue.isEmpty()) {
             // We need to exclude deletion records but can't just subtract
             // deletionQueue.size() since it can contain "stale" records
             // which persist until the next watch update flushes them
-            Map.Entry<KeyValue, Object> first = deletionQueue.firstEntry();
-            if (first != null) {
-                for (KeyValue deletion = first.getKey(); deletion != null;
-                        deletion = deletionQueue.higherKey(deletion)) {
-                    if (entries.get(deletion.getKey()) != deletion) {
-                        deletionQueue.remove(deletion);
-                    } else if (--total == 0) {
-                        return 0;
-                    }
+            for (Iterator<KeyValue> it = deletionQueue.iterator(); it.hasNext();) {
+                KeyValue deletion = it.next();
+                if (entries.get(deletion.getKey()) != deletion) {
+                    it.remove();
+                } else if (--total == 0) {
+                    return 0;
                 }
             }
         }
