@@ -139,7 +139,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public RangeCache(EtcdClient client, ByteString prefix, boolean sorted,
             Executor listenerExecutor) {
         // per etcd API spec: end == start+1 => prefix
-        this(client, prefix, KeyUtils.plusOne(prefix), sorted);
+        this(client, prefix, KeyUtils.plusOne(prefix), sorted, listenerExecutor);
     }
 
     public RangeCache(EtcdClient client, ByteString fromKey, ByteString toKey, boolean sorted) {
