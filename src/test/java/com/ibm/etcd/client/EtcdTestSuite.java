@@ -19,6 +19,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -35,45 +38,88 @@ import com.ibm.etcd.client.utils.PersistentLeaseKeyTest;
 import com.ibm.etcd.client.utils.RangeCacheTest;
 
 @RunWith(Suite.class)
-@SuiteClasses({ClientBuilderTest.class, KvTest.class, WatchTest.class, LeaseTest.class,
-    LockTest.class, PersistentLeaseKeyTest.class, RangeCacheTest.class})
+@SuiteClasses({
+    JsonConfigTest.class,
+    ClientBuilderTest.class,
+    KvTest.class,
+    WatchTest.class,
+    LeaseTest.class,
+    LockTest.class,
+    PersistentLeaseKeyTest.class,
+    RangeCacheTest.class
+    })
 public class EtcdTestSuite {
 
-    static Process etcdProcess;
+    static Process etcdProcess, etcdTlsProcess, etcdTlsCaProcess;
+
+    static final String etcdCommand;
+    static {
+         String etcd = System.getenv("ETCD_CMD");
+         etcdCommand = etcd != null ? etcd : "etcd";
+    }
+
+    static final String clientKey = EtcdTestSuite.class.getResource("/client.key").getFile();
+    static final String clientCert = EtcdTestSuite.class.getResource("/client.crt").getFile();
+    static final String serverKey = EtcdTestSuite.class.getResource("/server.key").getFile();
+    static final String serverCert = EtcdTestSuite.class.getResource("/server.crt").getFile();
 
     @BeforeClass
     public static void setUp() throws Exception {
+        etcdProcess = startProcess();
+        etcdTlsProcess = startProcess("--cert-file=" + serverCert,
+                "--key-file=" + serverKey, "--listen-client-urls=https://localhost:2360",
+                "--listen-peer-urls=http://localhost:2361",
+                "--advertise-client-urls=https://localhost:2360", "--name=tls");
+        etcdTlsCaProcess = null; startProcess("--cert-file=" + serverCert,
+                "--key-file=" + serverKey, "--listen-client-urls=https://localhost:2362",
+                "--listen-peer-urls=http://localhost:2363",
+                "--advertise-client-urls=https://localhost:2362", "--name=tls-ca", 
+                "--trusted-ca-file=" + clientCert, "--client-cert-auth");
+    }
+
+    private static Process startProcess(String... cmdline) throws Exception {
         boolean ok = false;
         try {
-            etcdProcess = Runtime.getRuntime().exec("etcd");
-            waitForStartup();
+            List<String> cmd = new ArrayList<>();
+            cmd.add(etcdCommand);
+            cmd.addAll(Arrays.asList(cmdline));
+            Process etcdProcess = new ProcessBuilder(cmd)
+                    .redirectErrorStream(true).start();
+            waitForStartup(etcdProcess);
             ok = true;
+            return etcdProcess;
         } catch (IOException e) {
             System.out.println("Failed to start etcd: " + e);
-            //e.printStackTrace();
+            return null;
         } finally {
             if (!ok) {
-                tearDown();
+                tearDown(etcdProcess);
             }
         }
     }
 
     @AfterClass
     public static void tearDown() {
-        if (etcdProcess != null) {
-            etcdProcess.destroy();
+        tearDown(etcdProcess);
+        tearDown(etcdTlsProcess);
+        tearDown(etcdTlsCaProcess);
+    }
+
+    public static void tearDown(Process process) {
+        if (process != null) {
+            process.destroy();
         }
     }
 
-    static void waitForStartup() throws Exception {
-        if (etcdProcess == null) {
+    static void waitForStartup(Process process) throws Exception {
+        if (process == null) {
             return;
         }
         ExecutorService es = Executors.newSingleThreadExecutor();
         TimeLimiter tl = SimpleTimeLimiter.create(es);
         try {
             tl.callWithTimeout(() -> {
-                Reader isr = new InputStreamReader(etcdProcess.getErrorStream());
+                Reader isr = new InputStreamReader(process.getInputStream());
                 BufferedReader br = new BufferedReader(isr);
                 String line;
                 while ((line = br.readLine()) != null &&

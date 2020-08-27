@@ -89,6 +89,9 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.util.AbstractReferenceCounted;
+import io.netty.util.IllegalReferenceCountException;
+import io.netty.util.ReferenceCounted;
 import io.netty.util.concurrent.FastThreadLocalThread;
 
 public class EtcdClient implements KvStoreClient {
@@ -110,6 +113,8 @@ public class EtcdClient implements KvStoreClient {
     // (not intended to be strict hostname validation here)
     protected static final Pattern ADDR_PATT =
             Pattern.compile("(?:https?://|dns:///)?([a-zA-Z0-9\\-.]+)(?::(\\d+))?");
+
+    private final ReferenceCounted refCount; // may be null
 
     private final int sessionTimeoutSecs;
 
@@ -140,6 +145,7 @@ public class EtcdClient implements KvStoreClient {
         private Executor executor; // for call-backs
         private boolean sendViaEventLoop = true; // default true
         private int sessTimeoutSecs = DEFAULT_SESSION_TIMEOUT_SECS;
+        private boolean refCounted;
 
         Builder(List<String> endpoints) {
             this.endpoints = Preconditions.checkNotNull(endpoints);
@@ -337,8 +343,8 @@ public class EtcdClient implements KvStoreClient {
             if (maxInboundMessageSize != 0) {
                 ncb.maxInboundMessageSize(maxInboundMessageSize);
             }
-            return new EtcdClient(ncb, defaultTimeoutMs, name, password,
-                    preemptAuth, threads, executor, sendViaEventLoop, sessTimeoutSecs);
+            return new EtcdClient(ncb, defaultTimeoutMs, name, password, preemptAuth,
+                    threads, executor, sendViaEventLoop, sessTimeoutSecs, refCounted);
         }
     }
 
@@ -391,7 +397,7 @@ public class EtcdClient implements KvStoreClient {
     EtcdClient(NettyChannelBuilder chanBuilder, long defaultTimeoutMs,
             ByteString name, ByteString password, boolean initialAuth,
             int threads, Executor userExecutor, boolean sendViaEventLoop,
-            int sessTimeoutSecs) {
+            int sessTimeoutSecs, boolean refCounted) {
 
         if (name == null && password != null) {
             throw new IllegalArgumentException("password without name");
@@ -400,6 +406,17 @@ public class EtcdClient implements KvStoreClient {
         this.password = password;
         this.sessionTimeoutSecs = sessTimeoutSecs;
 
+        this.refCount = !refCounted ? null : new AbstractReferenceCounted() {
+            @Override
+            public ReferenceCounted touch(Object hint) {
+                return null;
+            }
+            @Override
+            protected void deallocate() {
+                doClose();
+            }
+        };
+        
         chanBuilder.keepAliveTime(10L, SECONDS);
         chanBuilder.keepAliveTimeout(8L, SECONDS);
 
@@ -462,6 +479,22 @@ public class EtcdClient implements KvStoreClient {
 
     @Override
     public void close() {
+        if (refCount != null) {
+            refCount.release();
+        } else {
+            doClose();
+        }
+    }
+
+    boolean retain() {
+        if (refCount != null) try {
+            refCount.retain();
+            return true;
+        } catch (IllegalReferenceCountException irce) {}
+        return false;
+    }
+
+    void doClose() {
         if (leaseClient == CLOSED) {
             return;
         }
@@ -792,4 +825,22 @@ public class EtcdClient implements KvStoreClient {
         return internalExecutor;
     }
 
+    // Public for access by EtcdClusterConfig from config package
+    public static final class Internal {
+        private Internal() {}
+
+        public static boolean retain(EtcdClient client) {
+            return client != null && client.retain();
+        }
+
+        public static void cleanup(EtcdClient client) {
+            if (client != null) {
+                client.doClose();
+            }
+        }
+
+        public static void makeRefCounted(Builder builder) {
+            builder.refCounted = true;
+        }
+    }
 }
