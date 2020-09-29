@@ -73,6 +73,9 @@ public class EtcdClusterConfig {
     String composeDeployment;
     ByteSource certificate;
     String overrideAuthority;
+    // either both or neither of these must be set
+    ByteSource clientKey;
+    ByteSource clientCertificate;
 
     protected EtcdClusterConfig() {}
 
@@ -93,23 +96,34 @@ public class EtcdClusterConfig {
         EtcdClient.Builder builder = EtcdClient.forEndpoints(endpointList)
                 .withCredentials(user, password).withImmediateAuth()
                 .withMaxInboundMessageSize(maxMessageSize);
+        EtcdClient.Internal.makeRefCounted(builder);
         if (overrideAuthority != null) {
             builder.overrideAuthority(overrideAuthority);
         }
         TlsMode ssl = tlsMode;
         if (ssl == TlsMode.AUTO || ssl == null) {
             String ep = endpointList.get(0);
-            ssl = ep.startsWith("https://")
-                    || (!ep.startsWith("http://") && certificate != null)
-                    ? TlsMode.TLS : TlsMode.PLAINTEXT;
+            if (ep.startsWith("http://")) ssl = TlsMode.PLAINTEXT;
+            else if (certificate != null || clientCertificate != null
+                    || ep.startsWith("https://")) {
+                ssl = TlsMode.TLS;
+            }
         }
         if (ssl == TlsMode.PLAINTEXT) {
             builder.withPlainText();
-        } else if (composeDeployment != null) {
-            builder.withTrustManager(new ComposeTrustManagerFactory(composeDeployment,
-                    composeDeployment, certificate));
-        } else if (certificate != null) {
-            builder.withCaCert(certificate);
+        } else {
+            if (composeDeployment != null) {
+                builder.withTrustManager(new ComposeTrustManagerFactory(composeDeployment,
+                        composeDeployment, certificate));
+            } else if (certificate != null) {
+                builder.withCaCert(certificate);
+            }
+            if (clientCertificate != null && clientKey != null) {
+                try (InputStream keyStream = clientKey.openStream();
+                     InputStream certStream = clientCertificate.openStream()) {
+                    builder.withTlsConfig(b -> b.keyManager(certStream, keyStream));
+                }
+            }
         }
         if (isShutdown) {
             throw new IllegalStateException("shutdown");
@@ -141,19 +155,30 @@ public class EtcdClusterConfig {
         config.composeDeployment = props.getProperty("compose_deployment");
         config.rootPrefix = bs(props.getProperty("root_prefix")); // a.k.a namespace
         String tlsMode = props.getProperty("tls_mode");
-        if (tlsMode != null) {
+        if (tlsMode != null) try {
             config.tlsMode = TlsMode.valueOf(tlsMode);
+        } catch (IllegalArgumentException iae) {
+            throw new IOException("Invalid value "
+                    + tlsMode + " for etcd tls_mode config property");
         }
-        String certPath = props.getProperty("certificate_file");
-        if (certPath != null) {
-            File certFile = new File(certPath);
-            if (!certFile.exists()) {
-                throw new IOException("cant find certificate file: " + certPath);
-            }
-            config.certificate = Files.asByteSource(certFile);
-        }
+        config.clientKey = certFromProperties("client_key", props);
+        config.clientCertificate = certFromProperties("client_certificate", props);
+        config.certificate = certFromProperties("certificate_file", props);
         config.overrideAuthority = props.getProperty("override_authority");
-        return config;
+        return validateConfig(config);
+    }
+
+    private static ByteSource certFromProperties(String certFilePropName,
+            Properties props) throws IOException {
+        String certPath = props.getProperty(certFilePropName);
+        if (certPath == null) {
+            return null;
+        }
+        File certFile = new File(certPath);
+        if (certFile.exists()) {
+            return Files.asByteSource(certFile);
+        }
+        throw new IOException("cant find certificate file: " + certPath);
     }
 
     public static EtcdClusterConfig fromJson(ByteSource source, File dir) throws IOException {
@@ -170,27 +195,53 @@ public class EtcdClusterConfig {
         config.password = bs(jsonConfig.password);
         config.composeDeployment = jsonConfig.composeDeployment;
         config.rootPrefix = bs(jsonConfig.rootPrefix);
-        if (jsonConfig.certificateFile != null) {
-            File certFile = new File(jsonConfig.certificateFile);
+        if (jsonConfig.tlsMode != null) try {
+            config.tlsMode = TlsMode.valueOf(jsonConfig.tlsMode);
+        } catch (IllegalArgumentException iae) {
+            throw new IOException("Invalid value "
+                    + jsonConfig.tlsMode + " for etcd tls_mode config field");
+        }
+        config.clientKey = certFromJson(jsonConfig.clientKeyFile, jsonConfig.clientKey, dir);
+        config.clientCertificate = certFromJson(
+                jsonConfig.clientCertificateFile, jsonConfig.clientCertificate, dir);
+        config.certificate = certFromJson(jsonConfig.certificateFile, jsonConfig.certificate, dir);
+        config.overrideAuthority = jsonConfig.overrideAuthority;
+        return validateConfig(config);
+    }
+
+    private static ByteSource certFromJson(String certFileName, String literalCert,
+            File dir) throws IOException {
+        if (certFileName != null) {
+            File certFile = new File(certFileName);
             if (dir != null && !certFile.exists()) {
                 // try same dir as the config file
-                certFile = new File(dir, jsonConfig.certificateFile);
+                certFile = new File(dir, certFileName);
             }
             if (certFile.exists()) {
-                config.certificate = Files.asByteSource(certFile);
-            } else {
+                if (literalCert != null) {
+                    logger.warn("Ignoring json-embedded cert because file "
+                            + certFileName + " was also provided");
+                }
+                return Files.asByteSource(certFile);
+            } else if (literalCert != null) {
                 // will fall back to embedded if present
-                logger.warn("Can't find certificate file: " + jsonConfig.certificateFile);
-            }
-        }
-        if (jsonConfig.certificate != null) {
-            if (config.certificate != null) {
-                logger.warn("Ignoring json-embedded cert because file was also provided");
+                logger.warn("Can't find certificate file: " + certFileName);
             } else {
-                config.certificate = ByteSource.wrap(jsonConfig.certificate.getBytes(UTF_8));
+                throw new IOException("Can't find certificate file: " + certFileName);
             }
         }
-        config.overrideAuthority = jsonConfig.overrideAuthority;
+        return literalCert != null ? ByteSource.wrap(literalCert.getBytes(UTF_8)) : null;
+    }
+
+    private static EtcdClusterConfig validateConfig(EtcdClusterConfig config) throws IOException {
+        if (config.composeDeployment != null) {
+            logger.warn("compose_deployment config param is deprecated," +
+                    " use override_authority to set a specific name for TLS SNI");
+        }
+        if ((config.clientKey == null) != (config.clientCertificate == null)) {
+            throw new IOException("Must specify either both or neither of TLS client_key "
+                    + "and client_certificate attributes");
+        }
         return config;
     }
 
@@ -225,12 +276,26 @@ public class EtcdClusterConfig {
         throw new FileNotFoundException("etcd config json file not found: " + f);
     }
 
-    private static final Cache<CacheKey,EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
-            .<CacheKey,EtcdClient>removalListener(rn -> rn.getValue().close()).build();
+    private static final Cache<CacheKey, EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
+            .<CacheKey, EtcdClient>removalListener(rn -> EtcdClient.Internal.cleanup(rn.getValue())).build();
 
     public static EtcdClient getClient(EtcdClusterConfig config) throws IOException, CertificateException {
         try {
-            return clientCache.get(new CacheKey(config), config::newClient);
+            // Share equivalent ref-counted client from cache if possible
+            final CacheKey key = new CacheKey(config);
+            while (true) {
+                EtcdClient client = clientCache.getIfPresent(key);
+                if (client == null) {
+                    EtcdClient[] maybeNew = new EtcdClient[1];
+                    client  = clientCache.get(key, () -> maybeNew[0] = config.newClient());
+                    // if client != maybeNew[0] then we got a pre-existing client
+                    if (client != maybeNew[0] && !EtcdClient.Internal.retain(client)) {
+                        clientCache.invalidate(key);
+                        continue;
+                    }
+                }
+                return client;
+            }
         } catch (ExecutionException ee) {
             Throwables.throwIfInstanceOf(ee.getCause(), IOException.class);
             Throwables.throwIfInstanceOf(ee.getCause(), CertificateException.class);
@@ -267,12 +332,16 @@ public class EtcdClusterConfig {
             return Objects.equals(config.endpoints, other.endpoints)
                     && Objects.equals(config.composeDeployment, other.composeDeployment)
                     && Objects.equals(config.user, other.user)
-                    && Objects.equals(config.tlsMode, other.tlsMode);
+                    && Objects.equals(config.tlsMode, other.tlsMode)
+                    && (config.certificate == null) == (other.certificate == null)
+                    && (config.clientKey == null) == (other.clientKey == null)
+                    && (config.clientCertificate == null) == (other.clientCertificate == null);
         }
         @Override
         public int hashCode() {
             return Objects.hash(config.endpoints, config.user,
-                    config.composeDeployment, config.tlsMode);
+                    config.composeDeployment, config.tlsMode, config.certificate == null,
+                    config.clientKey == null, config.clientCertificate == null);
         }
     }
 
@@ -296,11 +365,21 @@ public class EtcdClusterConfig {
         @Deprecated
         @SerializedName("compose_deployment")
         String composeDeployment;
+        @SerializedName("tls_mode")
+        String tlsMode;
         @SerializedName("certificate")
         String certificate;
         @SerializedName("certificate_file")
         String certificateFile;
         @SerializedName("override_authority")
         String overrideAuthority;
+        @SerializedName("client_key")
+        String clientKey;
+        @SerializedName("client_key_file")
+        String clientKeyFile;
+        @SerializedName("client_certificate")
+        String clientCertificate;
+        @SerializedName("client_certificate_file")
+        String clientCertificateFile;
     }
 }
