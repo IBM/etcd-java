@@ -103,11 +103,10 @@ public class EtcdClusterConfig {
         TlsMode ssl = tlsMode;
         if (ssl == TlsMode.AUTO || ssl == null) {
             String ep = endpointList.get(0);
-            if (ep.startsWith("http://")) ssl = TlsMode.PLAINTEXT;
-            else if (certificate != null || clientCertificate != null
-                    || ep.startsWith("https://")) {
-                ssl = TlsMode.TLS;
-            }
+            ssl = ep.startsWith("https://")
+                    || (!ep.startsWith("http://")
+                            && (certificate != null && clientCertificate != null))
+                    ? TlsMode.TLS : TlsMode.PLAINTEXT;
         }
         if (ssl == TlsMode.PLAINTEXT) {
             builder.withPlainText();
