@@ -55,6 +55,12 @@ public class JsonConfigTest {
     }
 
     @Test
+    public void testBasicConfigNoScheme() throws Exception {
+        ByteSource json = makeJson("localhost:2379", null, null, null);
+        runBasicTests(EtcdClusterConfig.fromJson(json));
+    }
+
+    @Test
     public void testSslConfig() throws Exception {
         ByteSource json = makeJson("https://localhost:2360", EtcdTestSuite.serverCert, null, null);
         runBasicTests(EtcdClusterConfig.fromJson(json));
