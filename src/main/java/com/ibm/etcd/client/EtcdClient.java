@@ -602,7 +602,7 @@ public class EtcdClient implements KvStoreClient {
     };
 
     private Status lastAuthFailStatus;
-    private long lastAuthFailTime;
+    private long authFailRetryTime;
 
     protected static boolean reauthRequired(Throwable error) {
         Status status = Status.fromThrowable(error);
@@ -616,8 +616,7 @@ public class EtcdClient implements KvStoreClient {
 
     // This is only called in a synchronized context
     private CallCredentials refreshCredentials(Throwable trigger) {
-        long lastAuthFailure = System.currentTimeMillis() - lastAuthFailTime;
-        if (lastAuthFailure < 15_000L) {
+        if (System.currentTimeMillis() < authFailRetryTime) {
             // Rate-limit how often re-auth attempts are made,
             // return last auth failure in the meantime
             return new CallCredentials() {
@@ -645,9 +644,24 @@ public class EtcdClient implements KvStoreClient {
                     try {
                         applier.apply(futureTokenHeader.get());
                     } catch (ExecutionException | InterruptedException ee) { // (IE won't be thrown)
-                        Status failStatus = Status.fromThrowable(ee.getCause());
+                        Throwable failure = ee.getCause();
+                        Status failStatus;
+                        if (!reauthRequired(failure)) {
+                            // The authenticate RPC failed with an unexpected error (non auth-related)
+                            // Ensure our top-level status remains UNAUTHENTICATED or else higher
+                            // level logic will not recognize that another reauth attempt is required.
+                            failStatus = Status.UNAUTHENTICATED
+                                    .withDescription("(Re)authentication RPC failed")
+                                    .withCause(failure);
+                            authFailRetryTime = System.currentTimeMillis() + 5_000L;
+                        } else {
+                            failStatus = Status.fromThrowable(failure);
+                            // If this was a real auth failure, postpone further attempts a bit longer
+                            authFailRetryTime = System.currentTimeMillis() + 15_000L;
+                        }
                         lastAuthFailStatus = failStatus;
-                        lastAuthFailTime = System.currentTimeMillis();
+                        // Augment with the RPC failure that triggered the re-authentication,
+                        // if applicable
                         if (trigger != null) {
                             if (failStatus.getCause() != null) {
                                 failStatus.getCause().addSuppressed(trigger);
