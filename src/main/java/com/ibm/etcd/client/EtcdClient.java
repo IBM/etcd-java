@@ -159,6 +159,8 @@ public class EtcdClient implements KvStoreClient {
          * @param password
          */
         public Builder withCredentials(ByteString name, ByteString password) {
+            Preconditions.checkArgument((name == null) == (password == null),
+                    "name and password must both be null or both be non-null");
             this.name = name;
             this.password = password;
             return this;
@@ -189,6 +191,7 @@ public class EtcdClient implements KvStoreClient {
          * subject to change - threads to use for <b>internal</b> executor
          */
         public Builder withThreadCount(int threads) {
+            Preconditions.checkArgument(threads > 0, "invalid thread count: %s", threads);
             this.threads = threads;
             return this;
         }
@@ -251,7 +254,7 @@ public class EtcdClient implements KvStoreClient {
          * to all endpoints and does not otherwise affect DNS name resolution.
          */
         public Builder overrideAuthority(String authority) {
-            this.overrideAuthority = authority;
+            this.overrideAuthority = Preconditions.checkNotNull(authority, "authority");
             return this;
         }
 
@@ -303,7 +306,7 @@ public class EtcdClient implements KvStoreClient {
          * @param timeoutSecs
          */
         public Builder withSessionTimeoutSecs(int timeoutSecs) {
-            Preconditions.checkArgument(timeoutSecs < 1, "invalid session timeout: %s", timeoutSecs);
+            Preconditions.checkArgument(timeoutSecs > 0, "invalid session timeout: %s", timeoutSecs);
             this.sessTimeoutSecs = timeoutSecs;
             return this;
         }
