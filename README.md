@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/IBM/etcd-java.svg?branch=master)](https://travis-ci.org/IBM/etcd-java)
+[![Build Status](https://travis-ci.com/IBM/etcd-java.svg?branch=main)](https://travis-ci.com/IBM/etcd-java)
 
 # etcd-java
 
