@@ -16,8 +16,7 @@
 package com.ibm.etcd.client;
 
 import static com.ibm.etcd.client.KeyUtils.bs;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 import java.nio.charset.StandardCharsets;
 
@@ -83,6 +82,33 @@ public class JsonConfigTest {
     public void testSslCaCertConfig_noClientCert() throws Exception { // should fail
         ByteSource json = makeJson("https://localhost:2362", EtcdTestSuite.serverCert, null, null);
         runBasicTests(EtcdClusterConfig.fromJson(json));
+    }
+
+    @Test
+    public void testLifecycle() throws Exception {
+        // Test shared client reuse/recreation
+        ByteSource json = makeJson("http://localhost:2379", null, null, null);
+        EtcdClusterConfig config = EtcdClusterConfig.fromJson(json);
+        runBasicTests(config);
+        runBasicTests(config);
+        EtcdClient anotherClient = config.getClient();
+        runBasicTests(config);
+        assert !anotherClient.isClosed();
+        anotherClient.close();
+        assert anotherClient.isClosed();
+
+        EtcdClient c1 = config.getClient(), c2 = config.getClient();
+        assertSame(c1, c2);
+        c2.close();
+        EtcdClient c3 = config.getClient();
+        assertSame(c1, c3);
+        c1.close();
+        assert !c1.isClosed();
+        c3.close();
+        assert c1.isClosed();
+
+        EtcdClient c4 = config.getClient();
+        assertNotSame(c1, c4);
     }
 
     void runBasicTests(EtcdClusterConfig config) throws Exception {

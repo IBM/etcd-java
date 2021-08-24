@@ -25,11 +25,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Properties;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -276,6 +272,7 @@ public class EtcdClusterConfig {
     }
 
     private static final Cache<CacheKey, EtcdClient> clientCache = CacheBuilder.newBuilder().weakValues()
+            // Not a problem to call close() more than once on the underlying clients
             .<CacheKey, EtcdClient>removalListener(rn -> EtcdClient.Internal.cleanup(rn.getValue())).build();
 
     public static EtcdClient getClient(EtcdClusterConfig config) throws IOException, CertificateException {
@@ -285,15 +282,24 @@ public class EtcdClusterConfig {
             while (true) {
                 EtcdClient client = clientCache.getIfPresent(key);
                 if (client == null) {
-                    EtcdClient[] maybeNew = new EtcdClient[1];
-                    client  = clientCache.get(key, () -> maybeNew[0] = config.newClient());
-                    // if client != maybeNew[0] then we got a pre-existing client
-                    if (client != maybeNew[0] && !EtcdClient.Internal.retain(client)) {
-                        clientCache.invalidate(key);
-                        continue;
+                    final Deque<EtcdClient> maybeNew = new ArrayDeque<>(1);
+                    try {
+                        client = clientCache.get(key, () -> {
+                            EtcdClient newClient = config.newClient();
+                            maybeNew.add(newClient);
+                            return newClient;
+                        });
+                        if (client == maybeNew.peekLast()) { // else we got a preexisting client
+                            return maybeNew.pollLast();
+                        }
+                    } finally {
+                        maybeNew.stream().forEach(EtcdClient::close);
                     }
                 }
-                return client;
+                if (EtcdClient.Internal.retain(client)) {
+                    return client;
+                }
+                clientCache.invalidate(key); // Client is closed, discard and try again
             }
         } catch (ExecutionException ee) {
             Throwables.throwIfInstanceOf(ee.getCause(), IOException.class);
