@@ -113,7 +113,7 @@ public final class EtcdWatchClient implements Closeable {
         boolean userCancelled, finished;
         volatile boolean vUserCancelled;
 
-        public WatcherRecord(WatchCreateRequest request,
+        WatcherRecord(WatchCreateRequest request,
                 StreamObserver<WatchUpdate> observer,
                 Executor parentExecutor) {
             this.observer = observer;
@@ -328,10 +328,10 @@ public final class EtcdWatchClient implements Closeable {
         return true;
     }
 
-    final static class WatchHandle extends AbstractFuture<Boolean> implements Watch {
+    static final class WatchHandle extends AbstractFuture<Boolean> implements Watch {
         private final WeakReference<WatcherRecord> wrecRef;
 
-        public WatchHandle(WatcherRecord wrec) {
+        WatchHandle(WatcherRecord wrec) {
             wrecRef = new WeakReference<>(wrec);
         }
 

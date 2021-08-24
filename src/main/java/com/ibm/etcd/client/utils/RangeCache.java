@@ -430,9 +430,9 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
      * the cache
      */
     @FunctionalInterface
-    public static interface Listener {
+    public interface Listener {
 
-        public enum EventType {
+        enum EventType {
             /**
              * Key added or modified
              */
@@ -451,7 +451,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
          * @param type
          * @param keyValue
          */
-        public void event(EventType type, KeyValue keyValue);
+        void event(EventType type, KeyValue keyValue);
     }
 
     protected void notifyListeners(EventType type, KeyValue keyValue,
@@ -1008,7 +1008,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                             watch.close();
                         }
                     }
-                }, MoreExecutors.directExecutor());
+                }, directExecutor());
             }
         }
         closed = true;

@@ -151,31 +151,24 @@ public class RangeCacheTest {
     public void testCompaction() throws Exception {
         KvClient kvc = client.getKvClient();
 
-        Thread noise = new Thread() {
-            @Override
-            public void run() {
-                ByteString n = bs("/tmp/noise-");
-                ByteString k = n.concat(bs("0"));
-                for (int i = 0; i < 1000; i++) {
-                    kvc.delete(k).sync();
-                    k = n.concat(bs("" + i));
-                    PutResponse pr = kvc.put(k, n).sync();
-                    if (i == 500) {
-                        kvc.compact(pr.getHeader().getRevision(), false);
-                    }
+        Thread noise = new Thread(() -> {
+            ByteString n = bs("/tmp/noise-");
+            ByteString k = n.concat(bs("0"));
+            for (int i = 0; i < 1000; i++) {
+                kvc.delete(k).sync();
+                k = n.concat(bs("" + i));
+                PutResponse pr = kvc.put(k, n).sync();
+                if (i == 500) {
+                    kvc.compact(pr.getHeader().getRevision(), false);
                 }
             }
-        };
-        
+        });
+
         try (RangeCache rc = new RangeCache(client, bs("tmp/"), false)) {
-
             rc.start().get(1L, TimeUnit.SECONDS);
-
                     noise.start();
                     noise.join();
         }
-
-
     }
 
     @Test
@@ -358,7 +351,7 @@ public class RangeCacheTest {
         }
     }
 
-    private void testOfflineCompact(KvClient directKv, RangeCache rc, LocalNettyProxy prox) throws Exception {
+    private static void testOfflineCompact(KvClient directKv, RangeCache rc, LocalNettyProxy prox) throws Exception {
         int i;
         directKv.delete(bs("tmp2/aftercompact")).sync();
         directKv.put(bs("tmp2/abc-0"), bs("def")).sync();

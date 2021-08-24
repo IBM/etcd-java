@@ -53,7 +53,7 @@ public interface KvClient {
     /**
      * Used to get, watch or delete <b>all</b> of the keys (use with caution!)
      */
-    public static final ByteString ALL_KEYS = ByteString.copyFromUtf8("ALL_KEYS");
+    ByteString ALL_KEYS = ByteString.copyFromUtf8("ALL_KEYS");
 
     /**
      * Needed for backwards binary compatibility
@@ -280,9 +280,9 @@ public interface KvClient {
      * to being established, or throw an exception if the watch creation failed
      * (which might be {@link RevisionCompactedException}).
      */
-    public interface Watch extends Closeable, ListenableFuture<Boolean> {
+    interface Watch extends Closeable, ListenableFuture<Boolean> {
         @Override
-        public void close(); // doesn't throw
+        void close(); // doesn't throw
     }
 
     /**
@@ -294,9 +294,9 @@ public interface KvClient {
      * <p>
      * Note that like {@link Iterator}s in general, this is not threadsafe.
      */
-    public interface WatchIterator extends Closeable, Iterator<WatchUpdate> {
+    interface WatchIterator extends Closeable, Iterator<WatchUpdate> {
         @Override
-        public void close(); // doesn't throw
+        void close(); // doesn't throw
     }
 
     /**

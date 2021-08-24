@@ -38,8 +38,8 @@ import io.grpc.StatusRuntimeException;
  */
 public class JsonConfigTest {
 
-    private ByteSource makeJson(String endpoint, String certFile,
-            String clientKeyFile, String clientCertFile) throws Exception {
+    private static ByteSource makeJson(String endpoint, String certFile,
+                                       String clientKeyFile, String clientCertFile) throws Exception {
         String json = "{ \"endpoints\": \"" + endpoint + "\""
                 + (certFile != null ? ", \"certificate_file\": \"" + certFile + "\"" : "")
                 + (clientKeyFile != null ? ", \"client_key_file\": \"" + clientKeyFile + "\"" : "")

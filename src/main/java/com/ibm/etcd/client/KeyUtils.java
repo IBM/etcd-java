@@ -21,7 +21,7 @@ import com.google.protobuf.UnsafeByteOperations;
 /**
  * Helper methods for manipulating ByteString keys
  */
-public class KeyUtils {
+public final class KeyUtils {
 
     private KeyUtils() {} // static only
 

@@ -349,7 +349,7 @@ public class EtcdClusterConfig {
     private static final Gson gson = new Gson();
 
     private static JsonConfig deserializeJson(InputStream in) {
-        return gson.fromJson(new InputStreamReader(in, StandardCharsets.UTF_8), JsonConfig.class);
+        return gson.fromJson(new InputStreamReader(in, UTF_8), JsonConfig.class);
     }
 
     static class JsonConfig {

@@ -81,7 +81,7 @@ public final class EtcdLockClient implements LockClient {
         }
 
         @Override
-        public final ListenableFuture<LockResponse> async(Executor executor) {
+        public ListenableFuture<LockResponse> async(Executor executor) {
             if (lease == null) {
                 if (builder.getLease() != 0L) {
                     return super.async(executor);

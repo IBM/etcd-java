@@ -87,7 +87,7 @@ public final class EtcdKvClient implements KvClient {
     }
 
     //TODO reinstate txn idempotence determination
-    private static Predicate<TxnRequest> IDEMPOTENT_TXN = txn ->
+    private static final Predicate<TxnRequest> IDEMPOTENT_TXN = txn ->
         Iterables.all(Iterables.concat(txn.getSuccessList(),txn.getFailureList()), op ->
             op.getRequestCase() == RequestCase.REQUEST_RANGE);
 
@@ -320,7 +320,7 @@ public final class EtcdKvClient implements KvClient {
         FluentTxnSuccOps TXN_OPS = null; // lazy instantiate
         boolean idempotent = true; // set to false when any non-idempotent ops are added
 
-        public EtcdTxnRequest() {
+        EtcdTxnRequest() {
             super(EtcdKvClient.this.client, TxnRequest.newBuilder());
         }
         @Override

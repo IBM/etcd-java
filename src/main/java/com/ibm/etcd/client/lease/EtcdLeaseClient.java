@@ -167,7 +167,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
     final class KeepAliveFuture extends AbstractFuture<LeaseKeepAliveResponse> {
         final long leaseId;
-        public KeepAliveFuture(long leaseId) {
+        KeepAliveFuture(long leaseId) {
             this.leaseId = leaseId;
         }
         @Override
@@ -366,6 +366,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
         });
     }
 
+    @Override
     public void close() {
         if (closed) {
             return;
@@ -462,7 +463,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         ScheduledFuture<?> nextKeepAlive;
 
-        public LeaseRecord(long leaseId,
+        LeaseRecord(long leaseId,
                 int minExpirySecs, int intervalSecs,
                 StreamObserver<LeaseState> observer, Executor executor) {
             this.minExpirySecs = minExpirySecs;
@@ -635,8 +636,8 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
 
         private void logStateChange(LeaseState from, LeaseState to) {
             // Only log "abnormal" changes at info level
-            if (from == LeaseState.ACTIVE_NO_CONN || from == LeaseState.EXPIRED
-                    || to == LeaseState.ACTIVE_NO_CONN || to == LeaseState.EXPIRED) {
+            if (from == ACTIVE_NO_CONN || from == EXPIRED
+                    || to == ACTIVE_NO_CONN || to == EXPIRED) {
                 logger.info(this + " state changed from " + from + " to " + to);
             } else if (logger.isDebugEnabled()) {
                 logger.debug(this + " state changed from " + from + " to " + to);
@@ -799,7 +800,7 @@ public final class EtcdLeaseClient implements LeaseClient, Closeable {
     }
 
     final class ProtectedLeaseRecord extends LeaseRecord {
-        public ProtectedLeaseRecord(long leaseId, int minExpirySecs, int intervalSecs,
+        ProtectedLeaseRecord(long leaseId, int minExpirySecs, int intervalSecs,
                 StreamObserver<LeaseState> observer, Executor executor) {
             super(leaseId, minExpirySecs, intervalSecs, observer, executor);
         }

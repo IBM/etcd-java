@@ -220,7 +220,7 @@ public class GrpcClient {
     }
 
     //TODO probably move this
-    public static interface RetryDecision<ReqT> {
+    public interface RetryDecision<ReqT> {
         boolean retry(Throwable t, ReqT request);
     }
 
@@ -385,12 +385,12 @@ public class GrpcClient {
         return new ResilientBiDiStream<>(method, respStream, responseExecutor).start();
     }
 
-    public static interface ResilientResponseObserver<ReqT,RespT> extends StreamObserver<RespT> {
+    public interface ResilientResponseObserver<ReqT,RespT> extends StreamObserver<RespT> {
         /**
          * Called once initially, and once after each {@link #onReplaced(StreamObserver)},
          * to indicate the corresponding (sub) stream is successfully established
          */
-        public void onEstablished();
+        void onEstablished();
 
         /**
          * Indicates the underlying stream failed and will be re-established. There is
@@ -403,7 +403,7 @@ public class GrpcClient {
          * 
          * @param newStreamRequestObserver
          */
-        public void onReplaced(StreamObserver<ReqT> newStreamRequestObserver);
+        void onReplaced(StreamObserver<ReqT> newStreamRequestObserver);
     }
 
 
@@ -438,7 +438,7 @@ public class GrpcClient {
          * @param respStream
          * @param responseExecutor
          */
-        public ResilientBiDiStream(MethodDescriptor<ReqT,RespT> method,
+        ResilientBiDiStream(MethodDescriptor<ReqT,RespT> method,
                 ResilientResponseObserver<ReqT,RespT> respStream,
                 Executor responseExecutor) {
             this.method = method;
@@ -680,7 +680,7 @@ public class GrpcClient {
                         // delay stream retry using backoff/jitter strategy
                         ses.schedule(ResilientBiDiStream.this::refreshBackingStream,
                                 // skip attempt in rate-limited case (errCount <=1)
-                                delayAfterFailureMs(errCount <= 2 ? 2 : errCount), MILLISECONDS);
+                                delayAfterFailureMs(Math.max(errCount, 2)), MILLISECONDS);
                     }
                 } else {
                     sentCallOptions = null;
