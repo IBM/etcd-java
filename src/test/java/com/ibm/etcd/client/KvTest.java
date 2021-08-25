@@ -163,7 +163,7 @@ public class KvTest {
                 IntStream.range(0, 6000).forEach(i -> {
                     try {
                         client.getKvClient()
-                        .put(bs("deadlock-test/" + UUID.randomUUID().toString()), bs("some-value"))
+                        .put(bs("deadlock-test/" + UUID.randomUUID()), bs("some-value"))
                         .timeout(DEFAULT_TIMEOUT_MS)
                         .backoffRetry()
                         .deadline(Deadline.after(DEADLINE_TIMEOUT_MS, TimeUnit.MILLISECONDS))

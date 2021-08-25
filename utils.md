@@ -12,7 +12,7 @@ Auto-updated write-through lock-free cache for etcd3, supporting atomic compare-
 
 ### [PersistentLeaseKey](src/main/java/com/ibm/etcd/client/utils/PersistentLeaseKey.java)
 
-Etcd key-value bound to a [PersistentLease](src/main/java/com/ibm/etcd/client/lease/PersistentLease.java). If the key already exists it's value won't be changed but it will be associated with the provided lease. If it doesn't already exist or is deleted by someone else, it will be (re)-created with a provided default value. Closing the PersistentLeaseKey will always delete the associated key-value.
+Etcd key-value bound to a [PersistentLease](src/main/java/com/ibm/etcd/client/lease/PersistentLease.java). If the key already exists its value won't be changed but it will be associated with the provided lease. If it doesn't already exist or is deleted by someone else, it will be (re)-created with a provided default value. Closing the PersistentLeaseKey will always delete the associated key-value.
 
 ### [EtcdLeaderElection](src/main/java/com/ibm/etcd/client/utils/EtcdLeaderElection.java)
 

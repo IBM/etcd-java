@@ -294,8 +294,7 @@ public class WatchTest {
 
                 System.out.println("created " + i + " watches; left incomplete: " + watchedKeys.size());
 
-                watchedKeys.entrySet().forEach(e ->
-                System.out.println("** " + e.getKey().toStringUtf8() + "=" + e.getValue()));
+                watchedKeys.forEach((key, value) -> System.out.println("** " + key.toStringUtf8() + "=" + value));
 
                 assertTrue(watchedKeys.isEmpty());
             }

@@ -39,7 +39,7 @@ final class EtcdWatchIterator implements WatchIterator, StreamObserver<WatchUpda
         @Override public ResponseHeader getHeader() { return null; }
         @Override public List<Event> getEvents() { return Collections.emptyList(); }
         @Override public String toString() { return "watch complete"; }
-        public CompletedUpdate(RuntimeException error) {
+        CompletedUpdate(RuntimeException error) {
             this.error = error;
         }
     }

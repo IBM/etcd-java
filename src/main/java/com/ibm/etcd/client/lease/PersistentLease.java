@@ -31,7 +31,7 @@ import io.grpc.stub.StreamObserver;
  */
 public interface PersistentLease extends ListenableFuture<Long>, Closeable {
 
-    public enum LeaseState {
+    enum LeaseState {
         /**
          * Lease existence not yet established
          */

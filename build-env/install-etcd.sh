@@ -11,6 +11,6 @@ INSTALL_DIR="${1:-$HOME/etcd}"
 echo "Downloading etcd server ${ETCD_VERSION}"
 cd /tmp
 wget -nv https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz
-mkdir -p ${INSTALL_DIR}
-tar xzf etcd-${ETCD_VERSION}-linux-amd64.tar.gz -C ${INSTALL_DIR} --strip-components=1
+mkdir -p "${INSTALL_DIR}"
+tar xzf etcd-${ETCD_VERSION}-linux-amd64.tar.gz -C "${INSTALL_DIR}" --strip-components=1
 rm -rf etcd*.gz

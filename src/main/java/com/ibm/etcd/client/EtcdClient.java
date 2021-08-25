@@ -798,7 +798,7 @@ public class EtcdClient implements KvStoreClient {
         implements ScheduledExecutorService {
         private final ScheduledExecutorService delegate;
 
-        public SharedScheduledExecutorService(ScheduledExecutorService delegate) {
+        SharedScheduledExecutorService(ScheduledExecutorService delegate) {
             this.delegate = delegate;
         }
         @Override

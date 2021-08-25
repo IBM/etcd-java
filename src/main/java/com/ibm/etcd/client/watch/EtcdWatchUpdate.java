@@ -36,10 +36,12 @@ final class EtcdWatchUpdate implements WatchUpdate {
         this.response = response;
     }
 
+    @Override
     public ResponseHeader getHeader() {
         return response.getHeader();
     }
 
+    @Override
     public List<Event> getEvents() {
         return response.getEventsList();
     }

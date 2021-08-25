@@ -74,18 +74,18 @@ public interface FluentRequest<FR extends FluentRequest<FR,ReqT,RespT>,ReqT,Resp
             return (FR) this;
         }
         @Override
-        final public FR backoffRetry() {
+        public final FR backoffRetry() {
             this.retryStrategy = RetryStrategy.BACKOFF;
             return (FR) this;
         }
         @Override
-        final public FR backoffRetry(Condition precondition) {
+        public final FR backoffRetry(Condition precondition) {
             this.retryStrategy = RetryStrategy.BACKOFF;
             this.precondition = precondition;
             return (FR) this;
         }
         @Override
-        final public ReqT asRequest() {
+        public final ReqT asRequest() {
             return (ReqT) builder.build();
         }
         @Override
