@@ -5,7 +5,7 @@ if [ "$TRAVIS_BRANCH" = 'main' ] && [ "$TRAVIS_PULL_REQUEST" == 'false' ] && [ "
     echo "deploying release to central repository"
 
     # prepare key for signing
-    openssl aes-256-cbc -K "$encrypted_d363c995e9f6_key" -iv "$encrypted_d363c995e9f6_iv" -in cd/signingkey.asc.enc -out cd/signingkey.asc -d
+    openssl aes-256-cbc -K "$encrypted_171b1c559d7b_key" -iv "$encrypted_171b1c559d7b_iv" -in cd/signingkey.asc.enc -out cd/signingkey.asc -d
     gpg --fast-import cd/signingkey.asc
     shred --remove cd/signingkey.asc
     
