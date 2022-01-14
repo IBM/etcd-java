@@ -102,6 +102,13 @@
          <scope>compile</scope>
       </dependency>
 
+      <dependency>
+         <groupId>com.google.protobuf</groupId>
+         <artifactId>protobuf-java</artifactId>
+         <version>${protobuf-version}</version>
+         <scope>compile</scope>
+      </dependency>
+
       <!-- used only for etcd cluster configuration files -->
       <dependency>
          <groupId>com.google.code.gson</groupId>
@@ -197,15 +204,27 @@
          <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-javadoc-plugin</artifactId>
-            <version>3.2.0</version>
+            <version>3.3.1</version>
             <configuration>
                <source>8</source>
-               <quiet>true</quiet>
-               <nonavbar>true</nonavbar>
-               <notree>true</notree>
-               <nocomment>true</nocomment>
-               <nohelp>true</nohelp>
+               <breakiterator>true</breakiterator>
                <doclint>none</doclint>
+               <includeDependencySources>true</includeDependencySources>
+               <dependencySourceIncludes>
+                  <!-- classes from these show up in the API (unfortunately!) -->
+                  <dependencySourceInclude>com.google.guava:guava</dependencySourceInclude>
+                  <dependencySourceInclude>com.google.protobuf:protobuf-java</dependencySourceInclude>
+                  <dependencySourceInclude>io.grpc:grpc-stub</dependencySourceInclude>
+              </dependencySourceIncludes>
+              <sourceFileIncludes>
+                 <sourceFileInclude>src/main/java/com/ibm/etcd/client/**/*.java</sourceFileInclude>
+                 <sourceFileInclude>target/generated-sources/protobuf/**/*.java</sourceFileInclude>
+                 <!-- pick out only those external classes/interfaces that are used in the API -->
+                 <sourceFileInclude>target/distro-javadoc-sources/protobuf-java-*/com/google/protobuf/ByteString.java</sourceFileInclude>
+                 <sourceFileInclude>target/distro-javadoc-sources/guava-*/com/google/common/util/concurrent/ListenableFuture.java</sourceFileInclude>
+                 <sourceFileInclude>target/distro-javadoc-sources/grpc-stub-*/io/grpc/stub/StreamObserver.java</sourceFileInclude>
+              </sourceFileIncludes>
+              <sourcepath>${basedir}</sourcepath>
             </configuration>
             <executions>
                <execution>
