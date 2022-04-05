@@ -44,7 +44,6 @@ import java.util.stream.Stream;
 
 import javax.annotation.concurrent.GuardedBy;
 
-import org.checkerframework.checker.nullness.qual.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,7 +51,6 @@ import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.protobuf.ByteString;
 import com.ibm.etcd.client.EtcdClient;
 import com.ibm.etcd.client.FutureListener;
@@ -210,22 +208,40 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                         .map(ResponseOp::getResponseRange)
                         .collect(Collectors.toList()), directExecutor());
         }
-        
-        final SettableFuture<Boolean> promise = new SettableFuture<Boolean>() {
+
+        final class StartPromise extends SettableFuture<Boolean> implements Runnable {
+            volatile ListenableFuture<?> parent;
+            StartPromise(ListenableFuture<?> parent) {
+                this.parent = parent;
+                parent.addListener(this, directExecutor());
+            }
             @Override
-            protected void interruptTask() {
-                if (rrfut.cancel(true)) {
+            public void run() {
+                parent = null; // runs when parent completes
+            }
+            @Override
+            protected void afterDone() {
+                if (!wasInterrupted()) {
+                    return;
+                }
+                // propagate cancellation
+                final ListenableFuture<?> p = parent;
+                if (p != null && p.cancel(true)) {
                     return;
                 }
                 Watch theWatch;
                 synchronized(RangeCache.this) {
                     theWatch = watch;
+                    closed = true;
                 }
                 if (theWatch != null) {
                     theWatch.close();
                 }
             }
-        };
+        }
+
+        final SettableFuture<Boolean> promise = new StartPromise(rrfut);
+
         Futures.addCallback(rrfut, (FutureListener<List<RangeResponse>>) (rrs, err) -> {
             if (rrs != null) try {
                 setupWatch(rrs, firstTime, promise);
@@ -323,7 +339,6 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                     promise.setException(new CancellationException());
                     return;
                 }
-                assert startFuture == promise;
                 boolean isDone = promise.isDone();
                 if (isDone && promise.isCancelled()) {
                     return;
@@ -651,7 +666,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     /**
      * Stores result of put operations
      */
-    public static class PutResult {
+    public static final class PutResult {
         private final boolean succ;
         private final KeyValue kv;
         public PutResult(boolean success, KeyValue kv) {
@@ -1020,7 +1035,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
     static class SettableFuture<V> extends AbstractFuture<V> {
         @Override
-        public boolean set(@Nullable V value) {
+        public boolean set(V value) {
             return super.set(value);
         }
         @Override
