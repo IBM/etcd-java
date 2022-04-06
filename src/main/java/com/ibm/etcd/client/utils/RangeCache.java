@@ -210,6 +210,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         }
 
         final class StartPromise extends SettableFuture<Boolean> implements Runnable {
+            // Reference to parent future (etcd range request) held here just
+            // to be able to propagate cancellation if that happens before it completes.
             volatile ListenableFuture<?> parent;
             StartPromise(ListenableFuture<?> parent) {
                 this.parent = parent;
@@ -217,7 +219,11 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
             }
             @Override
             public void run() {
-                parent = null; // runs when parent completes
+                // Ensure that we remove our reference to the "parent" future as soon
+                // as it completes, since RangeCache stores this promise in the
+                // startFuture field, and we want to allow the original future and its
+                // possibly-large value to be garbage collected.
+                parent = null;
             }
             @Override
             protected void afterDone() {
