@@ -103,7 +103,7 @@ public final class EtcdWatchClient implements Closeable {
         private final StreamObserver<WatchUpdate> observer;
         private final WatchCreateRequest request;
         private final Executor watcherExecutor;
-
+        private long clusterId;
         private WatchHandle creationFuture;
 
         long upToRevision;
@@ -115,13 +115,14 @@ public final class EtcdWatchClient implements Closeable {
 
         WatcherRecord(WatchCreateRequest request,
                 StreamObserver<WatchUpdate> observer,
-                Executor parentExecutor) {
+                Executor parentExecutor, long clusterId) {
             this.observer = observer;
             this.request = request;
             long rev = request.getStartRevision();
             this.upToRevision = rev - 1;
             // bounded for back-pressure
             this.watcherExecutor = GrpcClient.serialized(parentExecutor);
+            this.clusterId = clusterId;
         }
 
         // null => cancelled (non-error)
@@ -175,6 +176,14 @@ public final class EtcdWatchClient implements Closeable {
         @GuardedBy("eventLoop")
         public boolean processCreatedResponse(WatchResponse wr, boolean cancelled) {
             long newWatchId = wr.getWatchId();
+            long cid = wr.getHeader().getClusterId();
+            if (clusterId == 0) {
+                clusterId = cid;
+            } else if (cid != clusterId) {
+                sendCancel(newWatchId);
+                processCancelledResponse(wr);
+                return false;
+            }
             if (cancelled || newWatchId == -1L) {
                 String reason = wr.getCancelReason();
                 if (reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)
@@ -235,15 +244,19 @@ public final class EtcdWatchClient implements Closeable {
                 error = null;
             } else {
                 ResponseHeader header = wr.getHeader();
-                long cRev = wr.getCompactRevision();
-                String reason = wr.getCancelReason();
                 long cancelledId = wr.getWatchId();
-                if (cRev != 0) {
-                    error = new RevisionCompactedException(header, cancelledId, reason, cRev);
-                } else if (wr.getCreated()) {
-                    error = new WatchCreateException(header, cancelledId, reason);
+                if (clusterId != 0 && clusterId != header.getClusterId()) {
+                    error = new ClusterChangedException(header, cancelledId, clusterId);
                 } else {
-                    error = new WatchCancelledException(header, cancelledId, reason);
+                    long cRev = wr.getCompactRevision();
+                    String reason = wr.getCancelReason();
+                    if (cRev != 0) {
+                        error = new RevisionCompactedException(header, cancelledId, reason, cRev);
+                    } else if (wr.getCreated()) {
+                        error = new WatchCreateException(header, cancelledId, reason);
+                    } else {
+                        error = new WatchCancelledException(header, cancelledId, reason);
+                    }
                 }
             }
             publishCompletionEvent(error);
@@ -286,16 +299,16 @@ public final class EtcdWatchClient implements Closeable {
 
 //  @Override
     public Watch watch(WatchCreateRequest createReq, StreamObserver<WatchUpdate> observer) {
-        return watch(createReq, observer, null);
+        return watch(createReq, observer, null, 0);
     }
 
     public Watch watch(WatchCreateRequest createReq,
-            StreamObserver<WatchUpdate> observer, Executor executor) {
+            StreamObserver<WatchUpdate> observer, Executor executor, long clusterId) {
         if (closed) {
             throw new IllegalStateException("closed");
         }
         final WatcherRecord wrec = new WatcherRecord(createReq,
-                observer, executor != null ? executor : observerExecutor);
+                observer, executor != null ? executor : observerExecutor, clusterId);
         WatchHandle handle = new WatchHandle(wrec);
         wrec.creationFuture = handle;
         boolean succ = createNewWatch(wrec);
@@ -310,7 +323,7 @@ public final class EtcdWatchClient implements Closeable {
      */
     public WatchIterator watch(WatchCreateRequest createReq) {
         EtcdWatchIterator watchIt = new EtcdWatchIterator();
-        Watch handle = watch(createReq, watchIt, MoreExecutors.directExecutor());
+        Watch handle = watch(createReq, watchIt, MoreExecutors.directExecutor(), 0);
         return watchIt.setWatch(handle);
     }
 

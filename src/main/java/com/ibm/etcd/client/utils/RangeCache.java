@@ -44,6 +44,7 @@ import java.util.stream.Stream;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import com.ibm.etcd.client.watch.ClusterChangedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -120,7 +121,8 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     private final NavigableSet<KeyValue> deletionQueue;
 
     // Modified only from listenerExecutor context
-    private final AtomicLong seenUpToRev = new AtomicLong(0L);
+    private final AtomicLong seenUpToRev = new AtomicLong(-1L);
+    private long clusterId;
 
     public RangeCache(EtcdClient client, ByteString prefix) {
         this(client, prefix, false, null);
@@ -176,23 +178,23 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         if (startFuture != null) {
             throw new IllegalStateException("already started");
         }
-        return startFuture = fullRefreshCache();
+        return startFuture = fullRefreshCache(false);
     }
 
     // internal method - should not be called while watch is active
-    protected ListenableFuture<Boolean> fullRefreshCache() {
-        ListenableFuture<List<RangeResponse>> rrfut;
-        long seenUpTo = seenUpToRev.get();
-        boolean firstTime = (seenUpTo == 0L);
-        if (firstTime || entries.size() <= 20) {
+    protected ListenableFuture<Boolean> fullRefreshCache(boolean clusterChange) {
+        final ListenableFuture<List<RangeResponse>> rrfut;
+        final long seenUpTo = seenUpToRev.get();
+        final boolean firstTime = (seenUpTo == -1L);
+        if (firstTime || clusterChange || entries.size() <= 20) {
             //TODO *maybe* chunking (for large caches)
             ListenableFuture<RangeResponse> rrf = kvClient.get(fromKey).rangeEnd(toKey)
                     .backoffRetry(() -> !closed)
                     .timeout(300_000L).async(); // long timeout (5min) for large ranges
             rrfut = Futures.transform(rrf, Collections::singletonList, directExecutor());
         } else {
-            // in case the local cache is large, reduce data transfer by requesting
-            // just keys, and full key+value only for those modified since seenUpToRev
+            // In case the local cache is large, reduce data transfer by requesting
+            // just keys, and full key+value only for those modified since seenUpToRev.
             RangeRequest.Builder rangeReqBld = RangeRequest.newBuilder()
                     .setKey(fromKey).setRangeEnd(toKey);
             RangeRequest newModsReq = rangeReqBld
@@ -250,7 +252,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
 
         Futures.addCallback(rrfut, (FutureListener<List<RangeResponse>>) (rrs, err) -> {
             if (rrs != null) try {
-                setupWatch(rrs, firstTime, promise);
+                setupWatch(rrs, firstTime, clusterChange, promise);
                 return;
             } catch (Throwable t) {
                 err = t;
@@ -262,12 +264,33 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     }
 
     // called only from listenerExecutor context
-    private void setupWatch(List<RangeResponse> rrs, boolean firstTime, SettableFuture<Boolean> promise) {
+    private void setupWatch(List<RangeResponse> rrs, boolean firstTime, boolean clusterChange,
+            SettableFuture<Boolean> promise) {
         if (closed) {
             throw new CancellationException();
         }
-        Set<ByteString> snapshot = firstTime && entries.isEmpty() ? null : new HashSet<>();
         RangeResponse toUpdate = rrs.get(0);
+        long cid = toUpdate.getHeader().getClusterId();
+        if (clusterId == 0) {
+            clusterId = cid;
+        } else if (clusterChange) {
+            // Following a post-cluster change refresh, reset the cluster id and seenUpToRev,
+            // and set the mod revision of all existing entries to -2. This will ensure they
+            // are all either replaced or deleted in the subsequent logic (e.g. in offerUpdate),
+            // avoiding a discontinuity in the cache in case the same kvs are in the new cluster.
+            logger.warn("Etcd cluster appears to have changed (id " + clusterId + " -> " + cid
+                    + "), resetting seen-up-to revision and performing full cache resync");
+            clusterId = cid;
+            seenUpToRev.set(0L);
+            entries.replaceAll((k, kv) -> KeyValue.newBuilder(kv).setModRevision(-2L).build());
+        } else if (cid != clusterId) {
+            // Unexpected cluster id change. Trigger a refresh/resync in 1 second to avoid race
+            // with any in-flight user updates of the cache (calls to offerUpdate).
+            promise.setFuture(Futures.scheduleAsync(() -> fullRefreshCache(true),
+                    1L, TimeUnit.SECONDS, client.internalScheduledExecutor()));
+            return;
+        }
+        Set<ByteString> snapshot = firstTime && entries.isEmpty() ? null : new HashSet<>();
         if (toUpdate.getKvsCount() > 0) {
             for (KeyValue kv : toUpdate.getKvsList()) {
                 if (snapshot != null) {
@@ -349,19 +372,25 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
                 if (isDone && promise.isCancelled()) {
                     return;
                 }
-                if (!(t instanceof RevisionCompactedException)) {
+                final boolean clusterChanged;
+                if (t instanceof ClusterChangedException) {
+                    clusterChanged = true;
+                } else if (!(t instanceof RevisionCompactedException)) {
                     logger.error("Watch failed with exception (fromKey = " +
                             fromKey.toStringUtf8() + ")", t);
                     promise.setException(t);
                     return;
+                } else {
+                    clusterChanged = false;
                 }
                 // Refresh the cache, which will renew the watch
                 ListenableFuture<Boolean> refresh;
-                if (isDone) {
-                    refresh = fullRefreshCache();
+                if (isDone && !clusterChanged) {
+                    refresh = fullRefreshCache(false);
                 } else {
-                    // If this is a watch creation failure, delay the attempt for 1 second
-                    refresh = Futures.scheduleAsync(RangeCache.this::fullRefreshCache,
+                    // If this is a watch creation failure or due to a cluster change,
+                    // delay the attempt for 1 second
+                    refresh = Futures.scheduleAsync(() -> fullRefreshCache(clusterChanged),
                             1L, TimeUnit.SECONDS, client.internalScheduledExecutor());
                     if (promise.setFuture(refresh)) {
                         refresh = null;
@@ -387,7 +416,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         };
 
         FluentWatchRequest watchRequest = kvClient.watch(fromKey).rangeEnd(toKey) //.prevKv() //TODO TBD
-                .progressNotify().startRevision(snapshotRev + 1).executor(listenerExecutor);
+                .progressNotify().clusterId(clusterId).startRevision(snapshotRev + 1).executor(listenerExecutor);
 
         Watch newWatch;
         synchronized (RangeCache.this) {
@@ -913,7 +942,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
     public Iterator<KeyValue> strongIterator() {
         long seenUpTo = seenUpToRev.get();
 
-        if (seenUpTo == 0L) {
+        while (seenUpTo <= 0L) {
             ListenableFuture<Boolean> startFut;
             synchronized (this) {
                 startFut = startFuture;
@@ -949,7 +978,7 @@ public class RangeCache implements AutoCloseable, Iterable<KeyValue> {
         RangeRequest seenCountReq = rangeReqBld.clearMaxCreateRevision()
                 .setRevision(seenUpTo).build(); // (countOnly still true here)
         RangeRequest newModsReq = rangeReqBld.clearRevision().clearCountOnly()
-                .setMinModRevision(seenUpTo+1).build();
+                .setMinModRevision(seenUpTo + 1).build();
 
         // first, attempt to get:
         //  0- kvs modified since seenUpTo

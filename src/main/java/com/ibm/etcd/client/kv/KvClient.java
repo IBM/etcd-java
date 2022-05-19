@@ -40,6 +40,7 @@ import com.ibm.etcd.api.TxnResponse;
 import com.ibm.etcd.api.WatchCreateRequest;
 import com.ibm.etcd.api.WatchCreateRequest.FilterType;
 import com.ibm.etcd.client.Condition;
+import com.ibm.etcd.client.watch.ClusterChangedException;
 import com.ibm.etcd.client.watch.RevisionCompactedException;
 
 import io.grpc.Deadline;
@@ -263,6 +264,12 @@ public interface KvClient {
         FluentWatchRequest progressNotify();
         FluentWatchRequest startRevision(long rev);
         FluentWatchRequest executor(Executor executor);
+
+        /**
+         * @param clusterId if nonzero, connected cluster must have this id or else
+         *                  the watch will fail with a {@link ClusterChangedException}.
+         */
+        FluentWatchRequest clusterId(long clusterId);
 
         /**
          * Start an asynchronous listener-based watch

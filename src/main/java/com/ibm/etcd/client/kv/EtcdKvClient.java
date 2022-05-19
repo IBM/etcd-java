@@ -526,6 +526,7 @@ public final class EtcdKvClient implements KvClient {
     final class EtcdWatchRequest implements FluentWatchRequest {
         private final WatchCreateRequest.Builder builder = WatchCreateRequest.newBuilder();
 
+        private long clusterId;
         private Executor executor;
 
         EtcdWatchRequest(ByteString key) {
@@ -585,8 +586,14 @@ public final class EtcdKvClient implements KvClient {
         }
 
         @Override
+        public FluentWatchRequest clusterId(long clusterId) {
+            this.clusterId = clusterId;
+            return this;
+        }
+
+        @Override
         public Watch start(StreamObserver<WatchUpdate> updateObserver) {
-            return watchClient().watch(builder.build(), updateObserver, executor);
+            return watchClient().watch(builder.build(), updateObserver, executor, clusterId);
         }
         @Override
         public WatchIterator start() {
