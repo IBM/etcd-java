@@ -20,6 +20,9 @@ Example JSON config doc:
 - `certificate_file` is the name of a pem-format (public) cert to use for TLS server-auth, either an absolute path or a filename assumed to be in the same directory as the json config file itself.
 - A `certificate` attribute may be included _instead of_ `certificate_file`, whose value is an embedded string UTF-8 pem format certificate. This allows a single json doc to hold all of the necessary connection info.
 - `client_key_file` and `client_certificate_file` form an optional key/cert pair for TLS client-auth. Either may also be embedded in a similar way by instead including `client_key` and/or `client_certificate` string attributes.
+   - Note that the private key must be PKCS8-encoded. PKCS1-encoded keys can be converted using openssl:
+
+     `openssl pkcs8 -topk8 -nocrypt -in pkcs1_key_file -out pkcs8_key.pem`
 - The `override_authority` attribute is optional and may be used to override the authority used for TLS hostname verification for _all_ endpoints.
 
 Example with embedded (trunctated) TLS cert:
