@@ -608,6 +608,9 @@ public class EtcdClient implements KvStoreClient {
     private long authFailRetryTime;
 
     protected static boolean reauthRequired(Throwable error) {
+        if (error == null) {
+            return false;
+        }
         Status status = Status.fromThrowable(error);
         Code code = status.getCode();
         return code == Code.UNAUTHENTICATED
