@@ -55,7 +55,7 @@
    </distributionManagement>
 
    <properties>
-      <grpc-version>1.50.0</grpc-version>
+      <grpc-version>1.53.0</grpc-version>
       <!-- netty and protobuf versions kept in sync with grpc's deps -->
       <netty-version>4.1.79.Final</netty-version>
       <netty-tcnative-version>2.0.54.Final</netty-tcnative-version>
