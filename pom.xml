@@ -55,16 +55,16 @@
    </distributionManagement>
 
    <properties>
-      <grpc-version>1.53.0</grpc-version>
+      <grpc-version>1.56.1</grpc-version>
       <!-- netty and protobuf versions kept in sync with grpc's deps -->
-      <netty-version>4.1.79.Final</netty-version>
-      <netty-tcnative-version>2.0.54.Final</netty-tcnative-version>
-      <protobuf-version>3.21.7</protobuf-version>
-      <gson-version>2.9.1</gson-version>
+      <netty-version>4.1.87.Final</netty-version>
+      <netty-tcnative-version>2.0.56.Final</netty-tcnative-version>
+      <protobuf-version>3.23.4</protobuf-version>
+      <gson-version>2.10.1</gson-version>
       <slf4j-version>1.7.36</slf4j-version>
       <junit-version>4.13.2</junit-version>
-      <guava-version>32.0.0-jre</guava-version>
-      <annotations-version>9.0.67</annotations-version>
+      <guava-version>32.1.1-jre</guava-version>
+      <annotations-version>9.0.78</annotations-version>
 
       <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
    </properties>
