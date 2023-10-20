@@ -586,22 +586,23 @@ public class EtcdClient implements KvStoreClient {
     // See https://godoc.org/github.com/coreos/etcd/auth#pkg-variables
     // and https://godoc.org/github.com/coreos/etcd/etcdserver/api/v3rpc/rpctypes#pkg-variables
     private static final String[] AUTH_FAILURE_MESSAGES = {
-            // These will be prefixed with "etcdserver: "
-            "root user does not exist",
-            "root user does not have root role",
-            "user name already exists",
-            "user name is empty",
-            "user name not found",
-            "role name already exists",
-            "role name not found",
-            "role name is empty",
-            "authentication failed, invalid user ID or password",
-            "permission denied",
-            "role is not granted to the user",
-            "permission is not granted to the role",
-            "authentication is not enabled",
-            "invalid auth token",
-            "invalid auth management"
+        // These will be prefixed with "etcdserver: "
+        "root user does not exist",
+        "root user does not have root role",
+        "user name already exists",
+        "user name is empty",
+        "user name not found",
+        "role name already exists",
+        "role name not found",
+        "role name is empty",
+        "authentication failed, invalid user ID or password",
+        "permission denied",
+        "role is not granted to the user",
+        "permission is not granted to the role",
+        "authentication is not enabled",
+        "invalid auth token",
+        "invalid auth management",
+        "revision of auth store is old"
     };
 
     private Status lastAuthFailStatus;
@@ -613,11 +614,13 @@ public class EtcdClient implements KvStoreClient {
         }
         Status status = Status.fromThrowable(error);
         Code code = status.getCode();
-        return code == Code.UNAUTHENTICATED
-                || (OTHER_AUTH_FAILURE_CODES.contains(code) &&
-                        (startsWith(status.getDescription(), "auth: ")
-                                || endsWith(status.getDescription(), AUTH_FAILURE_MESSAGES)))
-                || (code == Code.CANCELLED && reauthRequired(error.getCause()));
+        return reauthRequired(code, status.getDescription()) ||
+                (code == Code.CANCELLED && reauthRequired(error.getCause()));
+    }
+
+    public static boolean reauthRequired(Code code, String message) {
+        return code == Code.UNAUTHENTICATED || (OTHER_AUTH_FAILURE_CODES.contains(code) &&
+                (startsWith(message, "auth: ") || endsWith(message, AUTH_FAILURE_MESSAGES)));
     }
 
     // This is only called in a synchronized context

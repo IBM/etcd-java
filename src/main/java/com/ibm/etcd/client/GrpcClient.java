@@ -34,6 +34,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +72,8 @@ import io.netty.util.concurrent.OrderedEventExecutor;
 public class GrpcClient {
 
     private static final Logger logger = LoggerFactory.getLogger(GrpcClient.class);
+
+    private static final Pattern CAMELCASE_PATT = Pattern.compile("([a-z])([A-Z]+)");
 
     private final long defaultTimeoutMs;
  
@@ -114,6 +117,15 @@ public class GrpcClient {
 
     // modified only by reauthenticate() method
     private CallOptions callOptions = CallOptions.DEFAULT; // volatile tbd - lazy probably ok
+
+    // parse gRPC code from go formatted string (camel-case)
+    public static Code parseGoCodeString(String codeString) {
+        try {
+            return Code.valueOf(CAMELCASE_PATT.matcher(codeString).replaceAll("$1_$2").toUpperCase());
+        } catch (IllegalArgumentException _) {
+            return Code.UNKNOWN;
+        }
+    }
 
     /**
      * @deprecated use other constructor

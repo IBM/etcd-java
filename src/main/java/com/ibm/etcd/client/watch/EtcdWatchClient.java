@@ -25,9 +25,12 @@ import java.util.Queue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import com.ibm.etcd.client.EtcdClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,7 +53,7 @@ import io.grpc.Status.Code;
 import io.grpc.stub.StreamObserver;
 
 /**
- * 
+ *
  */
 public final class EtcdWatchClient implements Closeable {
 
@@ -58,7 +61,7 @@ public final class EtcdWatchClient implements Closeable {
 
     private static final Exception CANCEL_EXCEPTION = new CancellationException();
 
-    private static final String UNAUTH_REASON_PREFIX = "rpc error: code = PermissionDenied";
+    private static final Pattern CANCEL_REASON_PATT = Pattern.compile("rpc error: code = (\\w+) desc = (.*)");
 
     private static final MethodDescriptor<WatchRequest,WatchResponse> METHOD_WATCH =
             WatchGrpc.getWatchMethod();
@@ -109,7 +112,7 @@ public final class EtcdWatchClient implements Closeable {
         long upToRevision;
         long watchId = -2L; // -2 only pre-creation, >= -1 after
         boolean lastCreateFailedAuth;
- 
+
         boolean userCancelled, finished;
         volatile boolean vUserCancelled;
 
@@ -176,9 +179,8 @@ public final class EtcdWatchClient implements Closeable {
         public boolean processCreatedResponse(WatchResponse wr, boolean cancelled) {
             long newWatchId = wr.getWatchId();
             if (cancelled || newWatchId == -1L) {
-                String reason = wr.getCancelReason();
-                if (reason != null && reason.startsWith(UNAUTH_REASON_PREFIX)
-                        && !lastCreateFailedAuth) {
+                String cancelReason = wr.getCancelReason();
+                if (!lastCreateFailedAuth && reauthRequired(cancelReason)) {
                     // If watch creation fails due to an authentication issue (likely
                     // expired), we trigger a reauth+refresh of the stream by sending
                     // an UNAUTHENTICATED error. This watch must first be re-created
@@ -190,7 +192,7 @@ public final class EtcdWatchClient implements Closeable {
                             if (reqStream != null) {
                                 lastCreateFailedAuth = true;
                                 reqStream.onError(Code.UNAUTHENTICATED
-                                    .toStatus().withDescription(reason).asException());
+                                    .toStatus().withDescription(cancelReason).asException());
                             }
                         }
                     }
@@ -282,6 +284,18 @@ public final class EtcdWatchClient implements Closeable {
                 creationFuture = null;
             }
         }
+    }
+
+    static boolean reauthRequired(String cancelReason) {
+        if (cancelReason != null) {
+            Matcher m = CANCEL_REASON_PATT.matcher(cancelReason);
+            if (m.matches()) {
+                Code code = GrpcClient.parseGoCodeString(m.group(1));
+                String message = m.group(2);
+                return EtcdClient.reauthRequired(code, message);
+            }
+        }
+        return false;
     }
 
 //  @Override
