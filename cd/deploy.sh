@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 echo TRAVIS_JDK_VERSION="$TRAVIS_JDK_VERSION"
-if [ "$TRAVIS_BRANCH" = 'main' ] && [ "$TRAVIS_PULL_REQUEST" == 'false' ] && [ "$TRAVIS_JDK_VERSION" == 'openjdk11' ] && [ "$TARGET_ETCD_VERSION" == 'v3.5.9' ]; then
+if [ "$TRAVIS_BRANCH" = 'main' ] && [ "$TRAVIS_PULL_REQUEST" == 'false' ] && [ "$TRAVIS_JDK_VERSION" == 'openjdk17' ] && [ "$TARGET_ETCD_VERSION" == 'v3.5.10' ]; then
     echo "deploying release to central repository"
 
     # prepare key for signing

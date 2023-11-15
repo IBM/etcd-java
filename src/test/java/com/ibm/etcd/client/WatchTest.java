@@ -19,6 +19,7 @@ import static com.ibm.etcd.client.KeyUtils.bs;
 import static com.ibm.etcd.client.KvTest.t;
 import static org.junit.Assert.*;
 
+import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.BlockingQueue;
@@ -29,6 +30,7 @@ import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.ibm.etcd.api.Event;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -303,9 +305,8 @@ public class WatchTest {
 
     @Test
     public void testCreateFail() throws Exception {
-        KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379)
-                .withPlainText().build();
-        try {
+        try(KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379)
+                .withPlainText().build()) {
             KvClient kvc = client.getKvClient();
             // range end before start => should fail
             Watch watch2 = kvc.watch(ByteString.copyFromUtf8("/watchtest2"))
@@ -319,8 +320,59 @@ public class WatchTest {
                 System.out.println("watch creation failed with exception: " + e);
                 assertTrue(e.getCause() instanceof WatchCreateException);
             }
-        } finally {
-            client.close();
+        }
+    }
+
+    @Test
+    public void testRefreshExpiredToken() throws Exception {
+        try(KvStoreClient client = EtcdClient.forEndpoint("localhost", 2365)
+                .withPlainText()
+                .withCredentials(EtcdTestSuite.userName, EtcdTestSuite.userPwd)
+                .build()) {
+            KvClient kvc = client.getKvClient();
+
+            long start = System.currentTimeMillis();
+
+            ByteString keyToWatch = bs("watch-reauth-test");
+
+            final BlockingQueue<Object> watchEvents = new LinkedBlockingQueue<>();
+
+            final Object COMPLETED = new Object();
+            final StreamObserver<WatchUpdate> observer = new StreamObserver<WatchUpdate>() {
+                @Override
+                public void onNext(WatchUpdate value) {
+                    System.out.println(t(start) + "watch event: " + value);
+                    watchEvents.add(value);
+                }
+                @Override
+                public void onError(Throwable t) {
+                    System.out.println(t(start) + "watch error: " + t);
+                    watchEvents.add(t);
+                }
+                @Override
+                public void onCompleted() {
+                    System.out.println(t(start) + "watch completed");
+                    watchEvents.add(COMPLETED);
+                }
+            };
+            Watch watch = kvc.watch(keyToWatch).start(observer);
+            assertTrue(watch.get(1, TimeUnit.SECONDS));
+
+            kvc.put(keyToWatch, bs("value1")).sync();
+            // auth token will expire
+            Thread.sleep(5000L);
+
+            kvc.put(keyToWatch, bs("value2")).sync();
+            kvc.put(keyToWatch, bs("value3")).sync();
+            Thread.sleep(1000L);
+
+            Iterator<Event> events = watchEvents.stream().flatMap(we -> ((WatchUpdate) we).getEvents().stream()).iterator();
+            assertEquals(events.next().getKv().getValue(), bs("value1"));
+            assertEquals(events.next().getKv().getValue(), bs("value2"));
+            assertEquals(events.next().getKv().getValue(), bs("value3"));
+            assertFalse(events.hasNext());
+            assertEquals(kvc.get(keyToWatch).sync().getKvs(0).getValue(), bs("value3"));
+            watch.close();
         }
     }
 
