@@ -109,6 +109,7 @@ public class JsonConfigTest {
 
         EtcdClient c4 = config.getClient();
         assertNotSame(c1, c4);
+        c4.close();
     }
 
     void runBasicTests(EtcdClusterConfig config) throws Exception {
