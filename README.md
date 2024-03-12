@@ -19,8 +19,7 @@ etcd-java requires Java 8 or higher.
 
 ## Usage
 
-Create the client. Methods are grouped into separate `KvClient`, `LeaseClient` and `LockClient` interfaces.
-
+Create the client. Methods are grouped into separate `KvClient`, `LeaseClient`, `LockClient`, and `MaintenanceClient` interfaces.
 
 ```java
 KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379).withPlainText().build();
@@ -29,7 +28,7 @@ KvStoreClient client = EtcdClient.forEndpoint("localhost", 2379).withPlainText()
 KvClient kvClient = client.getKvClient();
 LeaseClient leaseClient = client.getLeaseClient();
 LockClient lockClient = client.getLockClient();
-
+MaintenanceClient maintenanceClient = client.getMaintenanceClient();
 ```
 
 Put a key-value synchronously
