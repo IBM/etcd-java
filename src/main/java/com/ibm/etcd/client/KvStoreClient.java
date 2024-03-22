@@ -21,6 +21,7 @@ import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
 import com.ibm.etcd.client.lock.LockClient;
+import com.ibm.etcd.client.maintenance.MaintenanceClient;
 
 public interface KvStoreClient extends Closeable {
 
@@ -29,6 +30,8 @@ public interface KvStoreClient extends Closeable {
     LeaseClient getLeaseClient();
 
     LockClient getLockClient();
+
+    MaintenanceClient getMaintenanceClient();
 
     /**
      * Returns a singular {@link PersistentLease} bound

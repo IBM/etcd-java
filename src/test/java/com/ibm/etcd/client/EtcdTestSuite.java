@@ -49,7 +49,8 @@ import com.ibm.etcd.client.utils.RangeCacheTest;
     LeaseTest.class,
     LockTest.class,
     PersistentLeaseKeyTest.class,
-    RangeCacheTest.class
+    RangeCacheTest.class,
+    MaintenanceTest.class
     })
 public class EtcdTestSuite {
 

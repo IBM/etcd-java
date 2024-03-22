@@ -65,6 +65,8 @@ import com.ibm.etcd.client.lease.LeaseClient;
 import com.ibm.etcd.client.lease.PersistentLease;
 import com.ibm.etcd.client.lock.EtcdLockClient;
 import com.ibm.etcd.client.lock.LockClient;
+import com.ibm.etcd.client.maintenance.EtcdMaintenanceClient;
+import com.ibm.etcd.client.maintenance.MaintenanceClient;
 
 import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
@@ -129,6 +131,7 @@ public class EtcdClient implements KvStoreClient {
     private final EtcdKvClient kvClient;
     private volatile LeaseClient leaseClient; // lazy-instantiated
     private volatile LockClient lockClient; // lazy-instantiated
+    private volatile MaintenanceClient maintenanceClient; // lazy-instantiated
     private volatile PersistentLease sessionLease; // lazy-instantiated
 
     public static class Builder {
@@ -738,6 +741,17 @@ public class EtcdClient implements KvStoreClient {
             }
         }
         return lc;
+    }
+
+    @Override
+    public MaintenanceClient getMaintenanceClient() {
+        MaintenanceClient mc = maintenanceClient;
+        if (mc == null) synchronized (this) {
+            if ((mc = maintenanceClient) == null) {
+                maintenanceClient = mc = new EtcdMaintenanceClient(grpc);
+            }
+        }
+        return mc;
     }
 
     @Override
