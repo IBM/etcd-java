@@ -55,7 +55,7 @@
    </distributionManagement>
 
    <properties>
-      <grpc-version>1.59.0</grpc-version>
+      <grpc-version>1.63.0</grpc-version>
       <!-- netty versions kept in sync with grpc's deps -->
       <netty-version>4.1.107.Final</netty-version>
       <netty-tcnative-version>2.0.62.Final</netty-tcnative-version>
@@ -84,6 +84,12 @@
          <scope>runtime</scope>
       </dependency>
 
+      <dependency>
+         <groupId>io.grpc</groupId>
+         <artifactId>grpc-core</artifactId>
+         <version>${grpc-version}</version>
+         <scope>compile</scope>
+      </dependency>
       <dependency>
          <groupId>io.grpc</groupId>
          <artifactId>grpc-netty</artifactId>
