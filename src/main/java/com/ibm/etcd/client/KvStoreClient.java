@@ -16,6 +16,7 @@
 package com.ibm.etcd.client;
 
 import java.io.Closeable;
+import java.util.List;
 
 import com.ibm.etcd.client.kv.KvClient;
 import com.ibm.etcd.client.lease.LeaseClient;
@@ -44,4 +45,7 @@ public interface KvStoreClient extends Closeable {
      */
     PersistentLease getSessionLease();
 
+    void updateCredentials(String name, String password);
+
+    List<String> getCredentials();
 }

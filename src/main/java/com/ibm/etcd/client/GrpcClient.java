@@ -264,16 +264,8 @@ public class GrpcClient {
                 // multiple retries disabled or deadline expired
                 return Futures.immediateFailedFuture(t);
             }
-            boolean reauth = false;
-            if (authProvider.requiresReauth(t)) {
-                if (afterReauth) {
-                    // if we have an auth failure immediately following a reauth, give up
-                    // (important to avoid infinite loop of auth failures)
-                    return Futures.immediateFailedFuture(t);
-                }
-                reauthenticate(baseCallOpts, t);
-                reauth = true;
-            } else if (!retry.retry(t, request)) {
+            boolean reauth = reauthIfRequired(t, baseCallOpts);;
+            if (!reauth && !retry.retry(t, request)) {
                 // retry predicate says no (non retryable request and/or error)
                 return Futures.immediateFailedFuture(t);
             }
@@ -441,8 +433,6 @@ public class GrpcClient {
         // modified only by response thread
         private boolean finished;
         private Throwable error;
-
-        private boolean lastAuthFailed;
 
         /**
          * 
@@ -636,7 +626,6 @@ public class GrpcClient {
             // called from grpc response thread
             @Override
             public void onNext(RespT value) {
-                lastAuthFailed = false;
                 respStream.onNext(value);
             }
             // called from grpc response thread
@@ -646,10 +635,9 @@ public class GrpcClient {
                 if (finished) {
                     finalError = true;
                 } else {
-                    reauthed = !lastAuthFailed && reauthIfRequired(t, sentCallOptions);
+                    reauthed = reauthIfRequired(t, sentCallOptions);
                     finalError = !reauthed && !retryableStreamError(t);
                 }
-                lastAuthFailed = reauthed;
                 if (!finalError) {
                     int errCount = -1;
                     String msg;
@@ -703,7 +691,6 @@ public class GrpcClient {
             // called from grpc response thread
             @Override
             public void onCompleted() {
-                lastAuthFailed = false;
                 if (!finished) {
                     logger.warn("Unexpected onCompleted received"
                             + " for stream of method " + method.getFullMethodName());
