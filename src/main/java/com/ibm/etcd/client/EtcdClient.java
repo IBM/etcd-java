@@ -95,8 +95,12 @@ import io.netty.util.AbstractReferenceCounted;
 import io.netty.util.IllegalReferenceCountException;
 import io.netty.util.ReferenceCounted;
 import io.netty.util.concurrent.FastThreadLocalThread;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class EtcdClient implements KvStoreClient {
+
+    private static final Logger logger = LoggerFactory.getLogger(EtcdClient.class);
 
     private static final Key<String> TOKEN_KEY =
             Key.of("token", Metadata.ASCII_STRING_MARSHALLER);
@@ -111,6 +115,7 @@ public class EtcdClient implements KvStoreClient {
 
     public static final long DEFAULT_TIMEOUT_MS = 10_000L; // 10sec default
     public static final int DEFAULT_SESSION_TIMEOUT_SECS = 20; // 20sec default
+    public static final long AUTH_RETRY_TIMEOUT_MS = 100L; // 100ms default
 
     // (not intended to be strict hostname validation here)
     protected static final Pattern ADDR_PATT =
@@ -120,7 +125,7 @@ public class EtcdClient implements KvStoreClient {
 
     private final int sessionTimeoutSecs;
 
-    private final ByteString name, password;
+    private ByteString name, password;
 
     private final MultithreadEventLoopGroup internalExecutor;
     private final ScheduledExecutorService sharedInternalExecutor;
@@ -580,7 +585,7 @@ public class EtcdClient implements KvStoreClient {
     // ------ authentication logic
 
     private static final Set<Code> OTHER_AUTH_FAILURE_CODES = ImmutableSet.of(
-            Code.INVALID_ARGUMENT, Code.FAILED_PRECONDITION, Code.PERMISSION_DENIED, Code.UNKNOWN);
+            Code.INVALID_ARGUMENT, Code.FAILED_PRECONDITION, Code.PERMISSION_DENIED, Code.INTERNAL, Code.UNKNOWN);
 
     // Various different errors can imply a re-auth is required (sometimes non-obvious),
     // so we cover most related messages to be safe. This should not cause problems since
@@ -665,11 +670,10 @@ public class EtcdClient implements KvStoreClient {
                             failStatus = Status.UNAUTHENTICATED
                                     .withDescription("(Re)authentication RPC failed")
                                     .withCause(failure);
-                            authFailRetryTime = System.currentTimeMillis() + 5_000L;
+                            authFailRetryTime = System.currentTimeMillis() + AUTH_RETRY_TIMEOUT_MS;
                         } else {
                             failStatus = Status.fromThrowable(failure);
-                            // If this was a real auth failure, postpone further attempts a bit longer
-                            authFailRetryTime = System.currentTimeMillis() + 15_000L;
+                            authFailRetryTime = System.currentTimeMillis() + AUTH_RETRY_TIMEOUT_MS;
                         }
                         lastAuthFailStatus = failStatus;
                         // Augment with the RPC failure that triggered the re-authentication,
@@ -697,6 +701,8 @@ public class EtcdClient implements KvStoreClient {
     }
 
     private ListenableFuture<AuthenticateResponse> authenticate() {
+        logger.error("Auth token seems to be incorrect or uninitialized yet. Getting new token with current etcd creds...");
+
         AuthenticateRequest request = AuthenticateRequest.newBuilder()
                 .setNameBytes(name).setPasswordBytes(password).build();
         // no call creds for auth call
@@ -768,6 +774,20 @@ public class EtcdClient implements KvStoreClient {
             throw new IllegalStateException("client closed");
         }
         return sl;
+    }
+
+    @Override
+    public void updateCredentials(String name, String password) {
+        this.name = ByteString.copyFromUtf8(name);
+        this.password = ByteString.copyFromUtf8(password);
+    }
+
+    @Override
+    public List<String> getCredentials() {
+        return Arrays.asList(
+            this.name.toStringUtf8(),
+            this.password.toStringUtf8()
+        );
     }
 
     public Executor getExecutor() {
